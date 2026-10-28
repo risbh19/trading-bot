@@ -1,0 +1,11 @@
+/build*/
+/.venv/
+__pycache__/
+*.pyc
+/.env
+/reports/
+*.log
+*.profraw
+*.profdata
+/.idea/
+/.vscode/
