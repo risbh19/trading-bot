@@ -44,6 +44,7 @@ add_test(NAME execution COMMAND execution_tests)
 trading_executable(hot_path_tests tests/hot_path_tests.cpp)
 add_test(NAME hot_path COMMAND hot_path_tests)
 trading_executable(paper_trader app/main.cpp)
+trading_executable(latency_bench bench/latency.cpp)
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     add_test(NAME replay COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_replay.py
