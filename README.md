@@ -1,6 +1,6 @@
 # Trading Bot — Paper Trading First
 
-A structured C++20 mock trading engine with deterministic replay, inline risk checks and Python analysis. **This version uses synthetic/CSV data and simulated money.** No API key, broker account or real-order connection is needed. Live mode always rejects requests.
+A structured C++20 mock trading engine with deterministic replay, inline risk checks and Python analysis. Practice with synthetic/CSV data or **broker-free delayed Indian equity quotes**, using simulated money. No API key, broker account or real-order connection is needed. Real-order mode always rejects requests.
 
 ## Quick start
 
@@ -32,6 +32,18 @@ For Ninja on Windows, the Python binary argument is `build/paper_trader.exe`. Th
 
 The default replay creates `reports/audit.csv` and `reports/summary.json`. Python also creates `reports/backtest/backtest.json`. The supplied 20-tick fixture produces 8 fills, ends flat, and loses **847 paise after 187 paise of fees**. This is an accounting example, not a profitable strategy or market performance result.
 
+## Broker-free market-price practice
+
+After building, start a persistent paper session with **INR 100,000 virtual capital**:
+
+```powershell
+.\scripts\run-live-paper.ps1
+```
+
+Or use `python -m live.run --symbol RELIANCE.NS` on any supported platform. This connects actual **delayed/indicative** Yahoo NSE/BSE prices to the same C++ strategy, risk checks and PaperBroker. It requires no broker account. The console shows source age, virtual equity, PnL, position and fills. Outside market hours it records the quote and stops without enabling orders.
+
+This public feed supplies completed one-minute closes, not a real-time executable order book. Spread/depth are simulated. Reports are in unique `reports/network-paper/` session folders. See the [setup, data limits and report guide](docs/network-paper.md).
+
 ## Mock trading controls
 
 Edit `config/paper.conf` to change strategy size, simulated order latency, adverse slippage, rejection injection, risk limits and fees. Configuration rejects unknown/duplicate keys and invalid numeric bounds. Money/prices use integer **paise**, quantity is units, and timestamps are monotonic nanoseconds.
@@ -62,6 +74,7 @@ The C++ `Engine` exposes `submit`, `modify`, `cancel`, `heartbeat`, `disconnect`
 include/trading/   # Book, strategy, risk, broker, fees, execution, queue
 app/              # CSV/config parsing and replay runner (outside the hot path)
 research/         # Python backtest wrapper and synthetic feed generator
+live/             # Public delayed quotes and persistent native-engine session
 config/           # Explicit paper/instrument/risk/fee configuration
 data/             # Small reproducible synthetic fixture
 tests/            # Core, execution/chaos, allocation and replay verification
@@ -73,7 +86,7 @@ scripts/          # Windows mock-run launcher
 
 ## Important model boundaries
 
-One engine handles one instrument and one session. It models top-of-book liquidity rather than an exchange queue, depth or market impact. Orders fill only on a later snapshot after their configured latency. Terminal inventory is marked at mid and **is not automatically liquidated**. Cash is net trading cash flow; there is no capital, margin, settlement, derivatives or MIS square-off model. No live feed, dashboard or production gateway is included in this milestone.
+One engine handles one instrument and one session. It models top-of-book liquidity rather than an exchange queue, depth or market impact. Orders fill only on a later snapshot after their configured latency. Terminal inventory is marked at mid and **is not automatically liquidated**. The optional virtual capital setting reserves cash for pending buys and fees; there is no margin, settlement, derivatives or MIS square-off model. A real-time broker feed, dashboard and production order gateway are not included.
 
 Fee defaults are illustrative arithmetic fixtures, not current CNC/MIS/NRML tariffs. Set product-specific fees and instrument constraints from verified metadata before interpreting any economic results. Submission rate limits are simulation settings; local cancels are immediate and do not model broker request throttling/cancel races. Real-feed paper trading is a later adapter step.
 
