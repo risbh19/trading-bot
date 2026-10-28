@@ -13,6 +13,7 @@ struct EngineConfig {
     RiskConfig risk{};
     StrategyConfig strategy{};
     bool strategy_enabled{true};
+    Money initial_capital_paise{0}; // Zero preserves unconstrained historical replay.
 };
 
 class Engine {
@@ -20,7 +21,10 @@ public:
     explicit Engine(EngineConfig config = {}) noexcept
         : config_(config), book_(config.instrument), broker_(config.instrument, config.paper),
           risk_(config.risk), strategy_(config.strategy) {
-        if (!broker_.valid() || !config.risk.valid() || !config.strategy.valid()) risk_.kill(Reject::invalid);
+        if (!broker_.valid() || !config.risk.valid() || !config.strategy.valid() ||
+            config.initial_capital_paise < 0 || config.initial_capital_paise > notional(max_price, max_quantity)) {
+            risk_.kill(Reject::invalid);
+        }
     }
 
     [[nodiscard]] bool on_tick(const Tick& tick) noexcept {
@@ -40,7 +44,8 @@ public:
             if (!emit(event)) return false;
             return assess_health() == Reject::none;
         }, [this](const OrderState& state, Price price, Quantity units) noexcept {
-            return risk_.check_fill(state, price, units, position(), broker_.orders(), book_.mid());
+            const auto result = risk_.check_fill(state, price, units, position(), broker_.orders(), book_.mid());
+            return result == Reject::none ? check_fill_cash(state, price, units) : result;
         });
         if (risk_.killed()) { shutdown_orders(); return true; }
         if (config_.strategy_enabled) {
@@ -74,6 +79,12 @@ public:
             (order.side == Side::buy ? book_.tick().ask : book_.tick().bid) +
             (order.side == Side::buy ? 1 : -1) * config_.paper.slippage_ticks * config_.instrument.tick_size;
         auto result = risk_.check(order, reservation, config_.instrument, book_, broker_.position(), broker_.orders(), now_);
+        if (result == Reject::none && config_.initial_capital_paise != 0 && order.side == Side::buy) {
+            const auto value = notional(reservation, order.quantity);
+            const auto required = buy_reservations() + value + fees_for(config_.paper.fees, value, Side::buy).total();
+            const auto balance = checked_add(config_.initial_capital_paise, position().cash);
+            if (!balance || *balance < required) result = Reject::funds;
+        }
         if (result == Reject::none) {
             risk_.record_request(now_);
             result = broker_.place(order, now_, reservation);
@@ -133,6 +144,40 @@ public:
     }
 
 private:
+    [[nodiscard]] Money reserve_buy(const OrderState& state, Quantity remaining,
+                                     Money turnover, Money paid) const noexcept {
+        const Money value = notional(state.risk_price, remaining);
+        const Money fees = fees_for(config_.paper.fees, turnover + value, Side::buy).total() - paid;
+        return value + (fees > 0 ? fees : 0);
+    }
+    [[nodiscard]] Money buy_reservations() const noexcept {
+        Money reserved{};
+        for (const auto& state : broker_.orders()) {
+            if (active(state.status) && state.order.side == Side::buy) {
+                reserved += reserve_buy(state, state.remaining, state.turnover, state.fees_paid);
+            }
+        }
+        return reserved;
+    }
+    [[nodiscard]] Reject check_fill_cash(const OrderState& filling, Price price, Quantity units) const noexcept {
+        if (config_.initial_capital_paise == 0) return Reject::none;
+        const Money value = notional(price, units);
+        const Money new_turnover = filling.turnover + value;
+        const Money new_fees = fees_for(config_.paper.fees, new_turnover, filling.order.side).total();
+        const Money delta = new_fees - filling.fees_paid;
+        const auto balance = checked_add(config_.initial_capital_paise, position().cash);
+        if (!balance) return Reject::funds;
+        const auto projected = checked_add(*balance, (filling.order.side == Side::buy ? -value : value) - delta);
+        if (!projected) return Reject::funds;
+        Money reserved{};
+        for (const auto& state : broker_.orders()) {
+            if (!active(state.status) || state.order.side != Side::buy) continue;
+            if (state.order.id == filling.order.id) {
+                reserved += reserve_buy(state, state.remaining - units, new_turnover, new_fees);
+            } else reserved += reserve_buy(state, state.remaining, state.turnover, state.fees_paid);
+        }
+        return *projected >= reserved ? Reject::none : Reject::funds;
+    }
     [[nodiscard]] Reject assess_health() noexcept {
         if (book_.ready() && absolute(notional(book_.mid(), position().quantity)) > config_.risk.max_total_notional) {
             risk_.kill(Reject::notional);

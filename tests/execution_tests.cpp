@@ -331,6 +331,120 @@ void reducing_at_notional_cap() {
     CHECK(engine->submit(market) == Reject::invalid);
 }
 
+void capital_exact_and_partial_fees() {
+    auto c = config();
+    c.initial_capital_paise = 0;
+    auto engine = ready(c);
+    CHECK(engine->submit(buy(1, 100)) == Reject::none);
+    CHECK(engine->on_tick(quote(1, 2)));
+    CHECK(engine->position().quantity == 100);
+    CHECK(engine->position().cash == -1'001'000); // Zero keeps historical replay unconstrained.
+
+    c = config();
+    c.paper.fees.brokerage_ppm = 10'000;
+    c.paper.fees.brokerage_cap = 50;
+    c.initial_capital_paise = 100'150; // Ten units at 10,010 paise plus one 50-paise order fee.
+    engine = ready(c);
+    CHECK(engine->submit(buy(1)) == Reject::none);
+    CHECK(engine->on_tick(quote(1, 2)));
+    CHECK(engine->position().quantity == 10);
+    CHECK(engine->position().cash == -c.initial_capital_paise);
+    CHECK(engine->submit(buy(2, 1)) == Reject::funds);
+    CHECK(!engine->killed());
+
+    --c.initial_capital_paise;
+    engine = ready(c);
+    CHECK(engine->submit(buy(1)) == Reject::funds); // One paise less than turnover plus fees.
+    CHECK(engine->position().cash == 0);
+    CHECK(engine->open_orders() == 0);
+    CHECK(!engine->killed());
+
+    ++c.initial_capital_paise;
+    engine = ready(c);
+    CHECK(engine->submit(buy(1)) == Reject::none);
+    CHECK(engine->on_tick(quote(1, 2, 4)));
+    CHECK(engine->position().quantity == 4);
+    CHECK(engine->position().fees == 50);
+    CHECK(state(*engine, 1).remaining == 6);
+    CHECK(engine->submit(buy(2, 1)) == Reject::funds);
+    CHECK(engine->on_tick(quote(2, 3, 6)));
+    CHECK(state(*engine, 1).status == Status::filled);
+    CHECK(engine->position().quantity == 10);
+    CHECK(engine->position().fees == 50); // Remaining reservation must not charge the capped fee twice.
+    CHECK(engine->position().cash == -c.initial_capital_paise);
+    CHECK(!engine->killed());
+}
+
+void capital_reservations_and_cancel() {
+    auto c = config();
+    c.initial_capital_paise = 200'200;
+    auto engine = ready(c);
+    CHECK(engine->submit(buy(1)) == Reject::none);
+    CHECK(engine->submit(buy(2)) == Reject::none);
+    CHECK(engine->position().cash == 0);
+    CHECK(engine->submit(buy(3, 1)) == Reject::funds); // Pending orders share the same virtual balance.
+    CHECK(engine->cancel(1) == Reject::none);
+    CHECK(engine->submit(buy(4)) == Reject::none);
+    CHECK(engine->on_tick(quote(1, 2, 15)));
+    CHECK(engine->position().quantity == 15);
+    CHECK(engine->position().cash == -150'150);
+    CHECK(state(*engine, 4).remaining == 5);
+    CHECK(engine->submit(buy(5, 1)) == Reject::funds);
+
+    c = config();
+    c.paper.fees.brokerage_ppm = 10'000;
+    c.paper.fees.brokerage_cap = 50;
+    c.initial_capital_paise = 100'150;
+    engine = ready(c);
+    CHECK(engine->submit(buy(1)) == Reject::none);
+    CHECK(engine->on_tick(quote(1, 2, 4)));
+    CHECK(engine->position().cash == -40'090);
+    CHECK(engine->cancel(1) == Reject::none);
+    CHECK(engine->open_orders() == 0);
+    // Cancellation releases the unfilled reservation, never the already spent turnover/fees.
+    CHECK(engine->submit(buy(2, 6)) == Reject::funds);
+    CHECK(engine->submit(buy(3, 5)) == Reject::none);
+    CHECK(engine->on_tick(quote(2, 3)));
+    CHECK(engine->position().quantity == 9);
+    CHECK(engine->position().fees == 100); // The replacement is a separate order with its own cap.
+    CHECK(engine->position().cash == -90'190);
+    CHECK(!engine->killed());
+}
+
+void capital_sale_proceeds_and_loss_basis() {
+    auto c = config();
+    c.initial_capital_paise = 10'010;
+    auto engine = ready(c);
+    CHECK(engine->submit(buy(1, 1)) == Reject::none);
+    CHECK(engine->on_tick(quote(1, 2)));
+    CHECK(engine->submit(buy(2, 1)) == Reject::funds);
+    auto sell = buy(3, 1, 10'000);
+    sell.side = Side::sell;
+    CHECK(engine->submit(sell) == Reject::none);
+    CHECK(engine->on_tick(quote(2, 3)));
+    CHECK(engine->position().quantity == 0);
+    CHECK(engine->position().cash == -10);
+    CHECK(engine->on_tick(quote(3, 4, 100, 9'990)));
+    CHECK(engine->submit(buy(4, 1, 10'000)) == Reject::none); // Filled sale proceeds fund the next purchase.
+    CHECK(engine->on_tick(quote(4, 5, 100, 9'990)));
+    CHECK(engine->position().quantity == 1);
+    CHECK(engine->position().cash == -10'010);
+
+    c = config();
+    c.initial_capital_paise = 10'000'000;
+    c.risk.max_daily_loss = 100;
+    engine = ready(c);
+    CHECK(engine->submit(buy(1)) == Reject::none);
+    CHECK(engine->on_tick(quote(1, 2)));
+    CHECK(engine->equity() == -50);
+    CHECK(!engine->killed());
+    CHECK(engine->on_tick(quote(2, 3, 100, 9'990)));
+    CHECK(engine->equity() == -150);
+    CHECK(c.initial_capital_paise + engine->equity() > 0);
+    CHECK(engine->killed()); // Positive account NAV must not conceal the daily trading loss.
+    CHECK(engine->kill_reason() == Reject::killed);
+}
+
 void audit_backpressure() {
     auto engine = ready();
     CHECK(engine->submit(buy(1)) == Reject::none);
@@ -370,6 +484,9 @@ int main() {
     request_limits_and_rejections();
     market_gap_and_invalid_config();
     reducing_at_notional_cap();
+    capital_exact_and_partial_fees();
+    capital_reservations_and_cancel();
+    capital_sale_proceeds_and_loss_basis();
     audit_backpressure();
     std::cout << "Execution, risk, and chaos tests passed\n";
 }

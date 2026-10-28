@@ -27,7 +27,7 @@ struct RiskConfig {
                orders_per_second > 0 && orders_per_second <= 1'000 && orders_per_minute >= orders_per_second &&
                orders_per_minute <= max_session_orders && orders_per_day >= orders_per_minute &&
                orders_per_day <= max_session_orders && price_band_bps > 0 && price_band_bps <= 10'000 &&
-               stale_after_ns > 0 && stale_after_ns <= 60 * second;
+               stale_after_ns > 0 && stale_after_ns <= 3'600 * second;
     }
 };
 

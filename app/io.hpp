@@ -52,6 +52,7 @@ inline EngineConfig read_config(const std::string& path) {
         }
 #define FIELD(name, target) else if (key == name) target = integer<decltype(target)>(value)
         FIELD("instrument_id", config.instrument.id);
+        FIELD("initial_capital_paise", config.initial_capital_paise);
         FIELD("tick_size_paise", config.instrument.tick_size);
         FIELD("lot_size", config.instrument.lot_size);
         FIELD("freeze_quantity", config.instrument.freeze_quantity);
@@ -93,6 +94,7 @@ inline EngineConfig read_config(const std::string& path) {
     if (file.bad()) throw std::runtime_error("Config read failed");
     PaperBroker broker(config.instrument, config.paper);
     if (!broker.valid() || !config.risk.valid() || !config.strategy.valid() ||
+        config.initial_capital_paise < 0 || config.initial_capital_paise > notional(max_price, max_quantity) ||
         config.strategy.quantity % config.instrument.lot_size != 0 ||
         config.strategy.quantity > config.risk.max_order_quantity) {
         throw std::runtime_error("Invalid configuration bounds; see config/paper.conf");
@@ -149,6 +151,7 @@ inline const char* name(Reject value) noexcept {
         case Reject::unknown_order: return "unknown_order";
         case Reject::live_disabled: return "live_disabled";
         case Reject::broker_reject: return "broker_reject";
+        case Reject::funds: return "funds";
     }
     return "unknown";
 }

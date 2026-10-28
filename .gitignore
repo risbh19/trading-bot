@@ -4,6 +4,7 @@ __pycache__/
 *.pyc
 /.env
 /reports/
+/work/
 *.log
 *.profraw
 *.profdata

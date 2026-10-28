@@ -25,7 +25,7 @@ enum class Status : std::uint8_t { empty, pending, open, partial, filled, cancel
 enum class Reject : std::uint8_t {
     none, invalid, killed, disconnected, stale, session_closed, size, position,
     notional, price_band, open_orders, rate, daily_limit, duplicate, capacity,
-    unknown_order, live_disabled, broker_reject
+    unknown_order, live_disabled, broker_reject, funds
 };
 
 struct Instrument {
