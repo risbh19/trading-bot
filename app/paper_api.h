@@ -23,7 +23,7 @@ extern "C" {
 #define PAPER_NOEXCEPT
 #endif
 
-/* ABI version 1. Each context has one owner; concurrent calls are unsupported. */
+/* ABI version 2. Each context has one owner; concurrent calls are unsupported. */
 typedef struct PaperSnapshot {
     int64_t position;
     int64_t cash_paise;
@@ -61,6 +61,8 @@ PAPER_API int paper_tick(void* context, uint64_t time_ns, uint64_t sequence,
                          int32_t session_open) PAPER_NOEXCEPT;
 /* Returns 1 processed, -1 for NULL context, regressing time, or out-of-range time. */
 PAPER_API int paper_heartbeat(void* context, uint64_t time_ns) PAPER_NOEXCEPT;
+/* Cancels all working virtual orders without killing an otherwise healthy paper session. */
+PAPER_API int paper_cancel_all(void* context, uint64_t time_ns) PAPER_NOEXCEPT;
 PAPER_API void paper_disconnect(void* context) PAPER_NOEXCEPT;
 PAPER_API void paper_shutdown(void* context) PAPER_NOEXCEPT;
 /* Returns 1 on success, -1 for NULL context/output. PnL excludes initial capital. */

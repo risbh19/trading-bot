@@ -125,6 +125,12 @@ public:
         now_ = now;
         if (assess_health() != Reject::none) shutdown_orders();
     }
+    [[nodiscard]] bool cancel_working_orders(Time now) noexcept {
+        if (now < now_) { kill(Reject::invalid); return false; }
+        now_ = now;
+        broker_.cancel_all(now_, [this](Event event) noexcept { return emit(event); });
+        return !audit_failed_;
+    }
     void disconnect() noexcept { risk_.disconnect(); shutdown_orders(); }
     void kill(Reject reason = Reject::killed) noexcept { risk_.kill(reason); shutdown_orders(); }
     void shutdown() noexcept { kill(); }

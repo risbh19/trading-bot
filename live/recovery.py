@@ -1,0 +1,228 @@
+"""Durable paper-session journal, manifest and single-process lock."""
+
+import errno
+import hashlib
+import json
+import os
+from pathlib import Path
+import uuid
+from datetime import datetime, timezone
+
+FORMAT_VERSION = 1
+API_VERSION = 2
+
+
+def _json_bytes(value) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False) + '\n').encode('utf-8')
+
+
+def atomic_json(path: Path, value) -> None:
+    temporary = path.with_name(path.name + '.tmp')
+    with temporary.open('wb') as stream:
+        stream.write(_json_bytes(value))
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, path)
+
+
+def config_digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def create_manifest(output: Path, symbol: str, config_data: bytes) -> dict:
+    output.mkdir(parents=True, exist_ok=False)
+    config_path = output / 'config.conf'
+    with config_path.open('xb') as stream:
+        stream.write(config_data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    manifest = {
+        'format_version': FORMAT_VERSION,
+        'session_id': uuid.uuid4().hex,
+        'symbol': symbol,
+        'config_sha256': config_digest(config_data),
+        'paper_api_version': API_VERSION,
+        'created_utc': datetime.now(timezone.utc).isoformat(),
+        'status': 'running',
+        'resume_count': 0,
+    }
+    atomic_json(output / 'session.json', manifest)
+    return manifest
+
+
+def load_manifest(output: Path, symbol: str, config_data: bytes) -> dict:
+    try:
+        manifest = json.loads((output / 'session.json').read_text(encoding='utf-8'))
+        saved_config = (output / 'config.conf').read_bytes()
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f'Cannot read resumable paper-session metadata: {error}') from error
+    if manifest.get('format_version') != FORMAT_VERSION or manifest.get('paper_api_version') != API_VERSION:
+        raise ValueError('Unsupported paper-session format or engine ABI; refusing automatic recovery')
+    if manifest.get('status') != 'running':
+        raise ValueError('This paper session is already finished and cannot be resumed')
+    if manifest.get('symbol') != symbol:
+        raise ValueError('Resume symbol does not match the saved paper session')
+    digest = config_digest(saved_config)
+    if manifest.get('config_sha256') != digest or digest != config_digest(config_data) or saved_config != config_data:
+        raise ValueError('Resume configuration differs from the saved paper session')
+    return manifest
+
+
+def _pid_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError as error:
+        if error.errno == errno.ESRCH or getattr(error, 'winerror', None) in (87, 1168):
+            return False
+        return True
+
+
+class SessionLock:
+    """Exclusive lock; a lock with an unverifiable owner fails closed."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.token = f'{os.getpid()} {uuid.uuid4().hex}\n'.encode('ascii')
+        self.held = False
+
+    def acquire(self) -> None:
+        for _ in range(3):
+            try:
+                descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            except FileExistsError:
+                try:
+                    owner = self.path.read_text(encoding='ascii').split()
+                    pid = int(owner[0])
+                except (OSError, ValueError, IndexError) as error:
+                    raise RuntimeError('Existing session lock is unreadable; refusing concurrent recovery') from error
+                if _pid_is_alive(pid):
+                    raise RuntimeError(f'Paper session is already running under process {pid}')
+                try:
+                    self.path.unlink()
+                except FileNotFoundError:
+                    pass
+                continue
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(self.token)
+                stream.flush()
+                os.fsync(stream.fileno())
+            self.held = True
+            return
+        raise RuntimeError('Could not acquire the paper-session lock')
+
+    def release(self) -> None:
+        if not self.held:
+            return
+        try:
+            if self.path.read_bytes() == self.token:
+                self.path.unlink()
+        except FileNotFoundError:
+            pass
+        finally:
+            self.held = False
+
+    def __enter__(self):
+        self.acquire()
+        return self
+
+    def __exit__(self, *_):
+        self.release()
+
+
+class SessionJournal:
+    """Append-only JSONL log. Operations are durable before engine calls."""
+
+    def __init__(self, path: Path, *, resume: bool, symbol: str, config_sha256: str):
+        self.path = path
+        self.records = []
+        if resume:
+            self.records = self._read_and_repair_tail()
+            if not self.records or self.records[0] != {
+                'kind': 'header', 'format_version': FORMAT_VERSION,
+                'paper_api_version': API_VERSION, 'symbol': symbol,
+                'config_sha256': config_sha256,
+            }:
+                raise ValueError('Session journal header does not match its manifest/configuration')
+            self.transactions = self._transactions(self.records[1:])
+            self.fd = os.open(path, os.O_WRONLY | os.O_APPEND)
+        else:
+            self.fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_APPEND, 0o600)
+            header = {'kind': 'header', 'format_version': FORMAT_VERSION,
+                      'paper_api_version': API_VERSION, 'symbol': symbol,
+                      'config_sha256': config_sha256}
+            self.records = [header]
+            self._write(header)
+            self.transactions = []
+
+    @staticmethod
+    def _transactions(records):
+        result = []
+        pending = None
+        expected_id = 1
+        for record in records:
+            if record.get('kind') == 'operation':
+                if pending is not None or record.get('id') != expected_id:
+                    raise ValueError('Session journal operation sequence is invalid')
+                pending = record
+            elif record.get('kind') == 'checkpoint':
+                if pending is None or record.get('id') != pending['id']:
+                    raise ValueError('Session journal checkpoint does not match an operation')
+                result.append((pending, record))
+                pending = None
+                expected_id += 1
+            else:
+                raise ValueError('Session journal contains an unknown record')
+        if pending is not None:
+            result.append((pending, None))
+        return result
+
+    def _read_and_repair_tail(self):
+        data = self.path.read_bytes()
+        last_newline = data.rfind(b'\n')
+        complete = data[:last_newline + 1] if last_newline >= 0 else b''
+        if len(complete) != len(data):
+            with self.path.open('r+b') as stream:
+                stream.truncate(len(complete))
+                stream.flush()
+                os.fsync(stream.fileno())
+        records = []
+        for line_number, line in enumerate(complete.splitlines(), 1):
+            try:
+                records.append(json.loads(line.decode('utf-8')))
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise ValueError(f'Session journal is corrupt at line {line_number}') from error
+        return records
+
+    def _write(self, record) -> None:
+        data = _json_bytes(record)
+        view = memoryview(data)
+        while view:
+            written = os.write(self.fd, view)
+            if written <= 0:
+                raise OSError('Short write to paper-session journal')
+            view = view[written:]
+        os.fsync(self.fd)
+        self.records.append(record)
+
+    def append_operation(self, record) -> None:
+        if self.transactions and self.transactions[-1][1] is None:
+            raise RuntimeError('A prepared paper-session operation still needs recovery')
+        self._write(record)
+        self.transactions.append((record, None))
+
+    def append_checkpoint(self, record) -> None:
+        if not self.transactions or self.transactions[-1][1] is not None or self.transactions[-1][0]['id'] != record.get('id'):
+            raise RuntimeError('Checkpoint does not follow its prepared operation')
+        self._write(record)
+        operation, _ = self.transactions[-1]
+        self.transactions[-1] = (operation, record)
+
+    def close(self) -> None:
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
