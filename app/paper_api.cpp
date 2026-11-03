@@ -41,7 +41,7 @@ static_assert(std::is_standard_layout_v<PaperEvent> && sizeof(PaperEvent) == 120
 
 extern "C" {
 
-int paper_api_version(void) noexcept { return 1; }
+int paper_api_version(void) noexcept { return 2; }
 
 void* paper_create(const char* config_path, char* error, size_t error_capacity) noexcept {
     copy_text(error, error_capacity, "");
@@ -100,6 +100,18 @@ int paper_heartbeat(void* context, uint64_t time_ns) noexcept {
         return -1;
     }
     instance->engine.heartbeat(time_ns);
+    instance->last_time = time_ns;
+    return 1;
+}
+
+int paper_cancel_all(void* context, uint64_t time_ns) noexcept {
+    auto* instance = get(context);
+    if (instance == nullptr) return -1;
+    if (!valid_time(time_ns) || time_ns < instance->last_time) {
+        instance->engine.kill(trading::Reject::invalid);
+        return -1;
+    }
+    if (!instance->engine.cancel_working_orders(time_ns)) return -1;
     instance->last_time = time_ns;
     return 1;
 }

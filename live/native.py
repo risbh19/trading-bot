@@ -28,6 +28,7 @@ class PaperEngine:
             'paper_tick': (c.c_int, [c.c_void_p, c.c_uint64, c.c_uint64, c.c_int64, c.c_int64,
                                    c.c_int32, c.c_int32, c.c_int32]),
             'paper_heartbeat': (c.c_int, [c.c_void_p, c.c_uint64]),
+            'paper_cancel_all': (c.c_int, [c.c_void_p, c.c_uint64]),
             'paper_disconnect': (None, [c.c_void_p]),
             'paper_shutdown': (None, [c.c_void_p]),
             'paper_snapshot': (c.c_int, [c.c_void_p, c.POINTER(Snapshot)]),
@@ -36,7 +37,7 @@ class PaperEngine:
         for name, (result, arguments) in declarations.items():
             function = getattr(self.library, name)
             function.restype, function.argtypes = result, arguments
-        if self.library.paper_api_version() != 1 or c.sizeof(Snapshot) != 80 or c.sizeof(Event) != 120:
+        if self.library.paper_api_version() != 2 or c.sizeof(Snapshot) != 80 or c.sizeof(Event) != 120:
             raise RuntimeError('Incompatible paper engine ABI')
         error = c.create_string_buffer(1024)
         self.handle = self.library.paper_create(str(config.resolve()).encode('utf-8'), error, len(error))
@@ -64,6 +65,13 @@ class PaperEngine:
             raise ValueError('Invalid monotonic time')
         if self.library.paper_heartbeat(self.handle, now_ns) != 1:
             raise RuntimeError('Engine rejected heartbeat time')
+
+    def cancel_all(self, now_ns):
+        self._check_owner()
+        if type(now_ns) is not int or not 0 <= now_ns <= 2**63 - 1:
+            raise ValueError('Invalid monotonic time')
+        if self.library.paper_cancel_all(self.handle, now_ns) != 1:
+            raise RuntimeError('Engine rejected cancel-all time or audit output failed')
 
     def disconnect(self):
         self._check_owner()

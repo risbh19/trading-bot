@@ -3,9 +3,13 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <string>
@@ -95,6 +99,7 @@ void null_guards() {
     CHECK(paper_pop_event(nullptr, nullptr) == -1);
     CHECK(paper_tick(nullptr, 0, 1, 10'000, 10'000, 1, 1, 1) == -1);
     CHECK(paper_heartbeat(nullptr, 0) == -1);
+    CHECK(paper_cancel_all(nullptr, 0) == -1);
     paper_disconnect(nullptr);
     paper_shutdown(nullptr);
     paper_destroy(nullptr);
@@ -184,11 +189,47 @@ void invalid_inputs_and_shutdown(const char* path, const Quote& quote) {
     CHECK(drain(disconnected.get()) >= 1);
 }
 
+void cancel_all_keeps_a_healthy_paper_session(const char* path, const Quote& quote) {
+    std::ifstream source(path);
+    CHECK(source.good());
+    std::string configuration((std::istreambuf_iterator<char>(source)), std::istreambuf_iterator<char>());
+    const auto lower_band = configuration.find("lower_band_paise=");
+    CHECK(lower_band != std::string::npos);
+    const auto line_end = configuration.find('\n', lower_band);
+    configuration.replace(lower_band, line_end - lower_band, "lower_band_paise=10000");
+    const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::string test_path = (std::filesystem::temp_directory_path() /
+                                   ("trading-bot-cancel-" + std::to_string(unique) + ".conf")).string();
+    {
+        std::ofstream test_config(test_path, std::ios::trunc);
+        CHECK(test_config.good());
+        test_config << configuration;
+    }
+    auto handle = create(test_path.c_str());
+    const Quote test_quote{10'000, quote.quantity};
+    for (uint64_t sequence = 1; sequence <= 20; ++sequence) {
+        CHECK(paper_tick(handle.get(), first_time + sequence * 10'000'000, sequence,
+                         test_quote.price, test_quote.price, 100, 100, 1) == 1);
+    }
+    CHECK(paper_tick(handle.get(), first_time + 210'000'000, 21,
+                     test_quote.price + 25, test_quote.price + 25, 100, 100, 1) == 1);
+    PaperSnapshot snapshot{};
+    CHECK(paper_snapshot(handle.get(), &snapshot) == 1);
+    CHECK(snapshot.open_orders == 1 && snapshot.position == 0);
+    CHECK(paper_cancel_all(handle.get(), first_time + 220'000'000) == 1);
+    CHECK(paper_snapshot(handle.get(), &snapshot) == 1);
+    CHECK(snapshot.killed == 0 && snapshot.open_orders == 0);
+    CHECK(drain(handle.get()) >= 1);
+    CHECK(paper_cancel_all(handle.get(), first_time + 219'000'000) == -1);
+    CHECK(paper_snapshot(handle.get(), &snapshot) == 1 && snapshot.killed == 1);
+    std::remove(test_path.c_str());
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     CHECK(argc == 2);
-    CHECK(paper_api_version() == 1);
+    CHECK(paper_api_version() == 2);
     static_assert(sizeof(PaperSnapshot) == 80);
     static_assert(sizeof(PaperEvent) == 120);
     null_guards();
@@ -196,5 +237,6 @@ int main(int argc, char** argv) {
     const auto quote = quote_for(argv[1]);
     valid_context_and_time(argv[1], quote);
     invalid_inputs_and_shutdown(argv[1], quote);
+    cancel_all_keeps_a_healthy_paper_session(argv[1], quote);
     std::cout << "C ABI tests passed\n";
 }

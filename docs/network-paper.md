@@ -52,7 +52,19 @@ An HTTP/schema/currency error, regressing provider timestamp or stale open-sessi
 
 Outside the regular-session window published in the feed, the runner records the closing quote and stops with `market_closed`. It does not trade after hours. During an open session, Ctrl+C stops at the next event-loop boundary. End-of-session cancellation does not automatically liquidate inventory.
 
-Each launch creates a **new** practice account/session. State is not automatically resumed after a restart. The unique output folder prevents accidental history overwrites.
+Each first launch creates a new practice account/session. A crash-interrupted session can be resumed from its report folder:
+
+```sh
+python -m live.run --resume reports/network-paper/20261104T090000Z-RELIANCE.NS-a1b2c3d4
+```
+
+The Windows launcher accepts the same session folder with `-Resume`:
+
+```powershell
+.\scripts\run-live-paper.ps1 -Resume 'reports/network-paper/20261104T090000Z-RELIANCE.NS-a1b2c3d4'
+```
+
+Resume uses the saved configuration and refuses a changed configuration, a finished session, or a second process holding the session lock. It replays the durable normalized-tick journal through the C++ engine and compares each saved order-event batch and account snapshot. A mismatch stops recovery. A torn final journal line is discarded; a prepared tick without a checkpoint is replayed and checkpointed because paper execution has no external side effect. After reconciliation, working paper orders are canceled before the feed resumes. If the saved quote is older than the engine stale limit, recovery latches a risk halt and does not resume trading. This is recovery of the local simulated ledger; there is no external broker order or account to reconcile.
 
 ## Reports
 
@@ -61,6 +73,8 @@ Find the path printed in the console, under `reports/network-paper/<UTC timestam
 | File | Contents |
 | --- | --- |
 | `summary.json` | Virtual cash/equity, PnL, inventory, fees, source age, risk/stop status. |
+| `session.json` | Format, symbol, configuration fingerprint and running/finished state. |
+| `session.jsonl` | Durable tick/operation journal with reconciled order events and account snapshots. |
 | `audit.csv` | C++ strategy, order, fill, rejection, cancellation and kill events. |
 | `source-quotes.jsonl` | Provider price and original bar timestamp plus receipt time. |
 | `ticks.csv` | Normalized simulation quotes accepted by the C++ engine. |

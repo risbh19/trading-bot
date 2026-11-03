@@ -1,7 +1,8 @@
 param(
     [string]$Symbol = 'RELIANCE.NS',
     [string]$PythonExe = '',
-    [double]$Duration = 0
+    [double]$Duration = 0,
+    [string]$Resume = ''
 )
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -16,6 +17,8 @@ if (-not $PythonExe) {
 if (-not $PythonExe) { throw 'Python 3.10+ is required. Pass its executable using -PythonExe.' }
 Push-Location -LiteralPath $projectRoot
 try {
-    & $PythonExe -m live.run --symbol $Symbol --duration $Duration
+    $livePaperArgs = @('-m', 'live.run', '--symbol', $Symbol, '--duration', [string]$Duration)
+    if ($Resume) { $livePaperArgs += @('--resume', $Resume) }
+    & $PythonExe @livePaperArgs
     if ($LASTEXITCODE -ne 0) { throw "Paper session stopped with exit code $LASTEXITCODE. Review the session summary." }
 } finally { Pop-Location }
