@@ -401,7 +401,8 @@ async def run_session(args, feed=None) -> int:
                         if task is not None and task.done():
                             quote = task.result()
                             task = None
-                            changed = session.accept(quote, time.monotonic_ns() - started, int(time.time()))
+                            changed = session.accept(
+                                quote, base_elapsed_ns + time.monotonic_ns() - runtime_started, int(time.time()))
                             report = session.report()
                             print(f"{quote.symbol}: INR {money(quote.price_paise)} | source age {session.last_age}s | "
                                   f"{'new quote' if changed else 'unchanged'} | virtual equity INR "
