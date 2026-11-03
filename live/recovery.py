@@ -69,6 +69,34 @@ def load_manifest(output: Path, symbol: str, config_data: bytes) -> dict:
 
 
 def _pid_is_alive(pid: int) -> bool:
+    if os.name == 'nt':
+        # os.kill(pid, 0) is not a process-existence check on Windows: signal
+        # zero is routed through GenerateConsoleCtrlEvent and can return
+        # ERROR_INVALID_PARAMETER even for a live process. Query a SYNCHRONIZE
+        # handle instead. Any error we cannot identify as "process absent"
+        # fails closed so an uncertain lock is never stolen.
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        open_process = kernel32.OpenProcess
+        open_process.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        open_process.restype = wintypes.HANDLE
+        wait_for_single_object = kernel32.WaitForSingleObject
+        wait_for_single_object.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        wait_for_single_object.restype = wintypes.DWORD
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+
+        handle = open_process(0x00100000, False, pid)  # SYNCHRONIZE
+        if not handle:
+            return ctypes.get_last_error() not in (87, 1168)  # invalid PID / not found
+        try:
+            return wait_for_single_object(handle, 0) != 0  # WAIT_OBJECT_0 means exited
+        finally:
+            close_handle(handle)
+
     try:
         os.kill(pid, 0)
         return True
@@ -80,7 +108,6 @@ def _pid_is_alive(pid: int) -> bool:
         if error.errno == errno.ESRCH or getattr(error, 'winerror', None) in (87, 1168):
             return False
         return True
-
 
 class SessionLock:
     """Exclusive lock; a lock with an unverifiable owner fails closed."""
