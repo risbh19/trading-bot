@@ -66,7 +66,8 @@ The C++ `Engine` exposes `submit`, `modify`, `cancel`, `heartbeat`, `disconnect`
 - Position and pending-order risk, order/notional/band/lot/freeze limits, rolling submission limits, daily marked-loss stop, stale/disconnect/manual kill and cancel-all.
 - Fill-time risk approval before accounting changes; adverse market-price protection.
 - Cumulative per-order fees with configurable brokerage, STT, exchange, SEBI, stamp duty and GST components.
-- Deterministic audit/replay, Python reconciliation, allocation checks and latency percentile harness.
+- Deterministic audit/replay, independent cash/fee/PnL/liquidity reconciliation, allocation checks and latency percentile harness.
+- Research input/config snapshots and hashes, execution-cost scenarios, chronological train/test selection and explicit fee evidence. See the [research guide](docs/research.md).
 
 ## Project layout
 
@@ -98,4 +99,4 @@ Fee defaults are illustrative arithmetic fixtures, not current CNC/MIS/NRML tari
 
 The harness reports p50/p90/p99/p99.9 and a timer baseline. It measures in-memory book/strategy/risk/paper matching with audit enqueueing; it excludes CSV, disk, network and broker/exchange processing. A microsecond engine measurement is not an exchange tick-to-trade guarantee. Optional tuning: `-DTRADING_NATIVE=ON`, `-DTRADING_LTO=ON`; sanitizer checks: `-DTRADING_SANITIZERS=ON` on supported GCC/Clang hosts.
 
-See [architecture](docs/architecture.md), [operations and roadmap](docs/operations.md), and [validation](docs/validation.md). The Git history separates foundation, execution, replay and verification milestones. Next: longer mock sessions, selected broker market-data feed with real orders disabled, then durable recovery/reconciliation before any separate live milestone.
+See [architecture](docs/architecture.md), [operations and roadmap](docs/operations.md), [research validation](docs/research.md), and [validation](docs/validation.md). Durable paper recovery/reconciliation and the first P1 research improvements are implemented. Remaining P1 work includes broker-specific fee/data validation, feed reconnect/data quality, multi-symbol portfolio risk, metrics and alerts.
