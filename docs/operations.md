@@ -54,7 +54,7 @@ An external feed adapter must call the heartbeat even when no quotes arrive. Wit
 - Regressing and duplicate events do not produce fills. A newer malformed snapshot stops the engine. Fix imported data rather than accepting an invalid market state.
 - Submit IDs increase for the whole session, including pre-trade rejects. A replacement cancels first and uses a fresh ID. There is no network retry/reconciliation protocol in this milestone.
 - Local cancellations are immediate in the simulator. Real broker cancel acknowledgments, cancel/fill races and ambiguous submission timeouts need a separate reconciled lifecycle before any live adapter.
-- A restart clears the in-memory ledger. It must never be used as an automatic way to clear a loss stop or forget an existing position. Persist and reconcile state before implementing process recovery.
+- The network paper runner journals each normalized tick before passing it to the engine and stores order events plus account snapshots after processing. Resume replays the journal, checks every committed event batch and snapshot, repairs a torn final line, and cancels working paper orders before polling again. A reconciliation mismatch or stale recovery gap stops the session. A latched risk halt remains latched. This reconstructs only the local paper ledger; there is no external broker state to reconcile.
 
 ## Measuring latency
 
@@ -77,10 +77,17 @@ Use `perf`/flame graphs to locate CPU time and cache profiling to test specific 
 
 ## Next integration milestones
 
-1. Run longer mock sessions and failure scenarios; compare expected accounting against independent calculations.
+1. Extend long-running simulation and failure-injection coverage; compare accounting against independent calculations and validate journal corruption/recovery behavior.
 2. Add a selected broker's authenticated market-data adapter, symbol metadata, reconnect/resubscribe logic, token handling and heartbeat scheduler. Keep real orders disabled.
-3. Add durable audit/recovery, order-ID reconciliation, acknowledgments, partial/late fills, cancellation races and account-level limits.
+3. Before any broker adapter is considered, add broker-side order-ID reconciliation, acknowledgments, partial/late fills, cancel/fill races and account-level limits. The current durable journal reconciles only paper-engine events.
 4. Verify current broker policy, instrument/product fees, exchange sessions/holidays, capital/margin/settlement treatment and any required registration/tagging before designing a live gateway.
 5. Add a live adapter only as a separately reviewed milestone with explicit user authorization. The current `LiveBroker` stub always rejects requests.
+
+## Remaining prioritized backlog
+
+| Priority | Work |
+| --- | --- |
+| P1 | Improve backtesting with verified fee schedules, slippage/liquidity models and out-of-sample validation; add market-data reconnect/resubscribe and broader data-quality checks; expand to multi-symbol portfolio risk; add structured metrics and alerts. Broker-side acknowledgments and reconciliation remain future work until a broker is selected. |
+| P2 | Add a monitoring dashboard, reproducible deployment packaging and a concise operational runbook. |
 
 For future verification, consult the [SEBI retail algorithmic-trading circular](https://www.sebi.gov.in/legal/circulars/feb-2025/safer-participation-of-retail-investors-in-algorithmic-trading_91614.html), its subsequent amendments and exchange implementation standards, plus the chosen broker's current documentation. The [Zerodha Kite Connect FAQ](https://support.zerodha.com/category/trading-and-markets/general-kite/kite-api/articles/kite-connect-api-faqs) is one broker-specific starting point. These links are references to check when selecting an integration; this repository does not certify regulatory compliance or apply a universal broker rate limit.

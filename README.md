@@ -34,7 +34,7 @@ The default replay creates `reports/audit.csv` and `reports/summary.json`. Pytho
 
 ## Broker-free market-price practice
 
-After building, start a persistent paper session with **INR 100,000 virtual capital**:
+After building, start a broker-free paper session with **INR 100,000 virtual capital**:
 
 ```powershell
 .\scripts\run-live-paper.ps1
@@ -42,7 +42,7 @@ After building, start a persistent paper session with **INR 100,000 virtual capi
 
 Or use `python -m live.run --symbol RELIANCE.NS` on any supported platform. This connects actual **delayed/indicative** Yahoo NSE/BSE prices to the same C++ strategy, risk checks and PaperBroker. It requires no broker account. The console shows source age, virtual equity, PnL, position and fills. Outside market hours it records the quote and stops without enabling orders.
 
-This public feed supplies completed one-minute closes, not a real-time executable order book. Spread/depth are simulated. Reports are in unique `reports/network-paper/` session folders. See the [setup, data limits and report guide](docs/network-paper.md).
+This public feed supplies completed one-minute closes, not a real-time executable order book. Spread/depth are simulated. Reports are in unique `reports/network-paper/` session folders. A crash-interrupted session can be recovered with `python -m live.run --resume <session-folder>`; recovery replays and reconciles the saved paper ledger, then cancels any working orders before polling again. Cleanly finished sessions cannot be resumed. See the [setup, recovery, data limits and report guide](docs/network-paper.md).
 
 ## Mock trading controls
 
