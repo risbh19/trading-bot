@@ -13,6 +13,7 @@ struct PaperConfig {
     Price slippage_ticks{1};
     std::uint32_t reject_every{0}; // Deterministic fault injection, disabled by default.
     FeeSchedule fees{};
+    std::uint32_t participation_bps{10'000}; // Shared fraction of displayed depth, per side/snapshot.
 };
 
 class PaperBroker {
@@ -23,7 +24,8 @@ public:
 
     [[nodiscard]] bool valid() const noexcept {
         return instrument_.valid() && config_.fees.valid() && config_.latency_ns <= 60 * second &&
-               config_.slippage_ticks >= 0 && config_.slippage_ticks <= 1'000;
+               config_.slippage_ticks >= 0 && config_.slippage_ticks <= 1'000 &&
+               config_.participation_bps <= 10'000;
     }
 
     [[nodiscard]] Reject place(const Order& order, Time now, Price risk_price) noexcept {
@@ -74,8 +76,12 @@ public:
 
     template <typename Emit, typename CanFill>
     void on_tick(const Tick& tick, Emit&& emit, CanFill&& can_fill) noexcept {
-        Quantity bid_liquidity = tick.bid_quantity;
-        Quantity ask_liquidity = tick.ask_quantity;
+        const auto accessible = [this](Quantity displayed) noexcept {
+            return static_cast<Quantity>(static_cast<std::int64_t>(displayed) *
+                                         config_.participation_bps / 10'000);
+        };
+        Quantity bid_liquidity = accessible(tick.bid_quantity);
+        Quantity ask_liquidity = accessible(tick.ask_quantity);
         // FIFO by monotonically increasing accepted ID. Slot reuse must not jump the queue.
         OrderId after{};
         for (std::size_t n = 0; n < capacity; ++n) {

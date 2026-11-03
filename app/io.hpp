@@ -60,6 +60,7 @@ inline EngineConfig read_config(const std::string& path) {
         FIELD("upper_band_paise", config.instrument.upper_band);
         FIELD("latency_ns", config.paper.latency_ns);
         FIELD("slippage_ticks", config.paper.slippage_ticks);
+        FIELD("participation_bps", config.paper.participation_bps);
         FIELD("reject_every", config.paper.reject_every);
         FIELD("max_order_quantity", config.risk.max_order_quantity);
         FIELD("max_position", config.risk.max_position);
