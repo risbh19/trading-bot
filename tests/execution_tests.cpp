@@ -119,6 +119,40 @@ void fees_and_cash() {
     CHECK(buy_fees.gst == charge(buy_fees.brokerage + buy_fees.exchange + buy_fees.sebi, fees.gst_ppm));
 }
 
+void participation_cap_and_lot_rounding() {
+    auto c = config();
+    c.paper.participation_bps = 5'000;
+    auto engine = ready(c);
+    CHECK(engine->submit(buy(1, 4)) == Reject::none);
+    CHECK(engine->submit(buy(2, 4)) == Reject::none);
+    CHECK(engine->on_tick(quote(1, 2, 10)));
+    CHECK(engine->position().quantity == 5); // Shared cap, not five units for each order.
+    CHECK(state(*engine, 1).status == Status::filled);
+    CHECK(state(*engine, 2).remaining == 3);
+    CHECK(engine->on_tick(quote(2, 3, 10)));
+    CHECK(engine->position().quantity == 8);
+
+    c.instrument.lot_size = 5;
+    engine = ready(c);
+    CHECK(engine->submit(buy(1, 10)) == Reject::none);
+    CHECK(engine->on_tick(quote(1, 2, 19))); // 50% gives 9 units; only one complete lot.
+    CHECK(engine->position().quantity == 5);
+    CHECK(state(*engine, 1).remaining == 5);
+    CHECK(!engine->on_tick(quote(1, 2, 100))); // Duplicate cannot refresh the cap.
+    CHECK(engine->position().quantity == 5);
+
+    c = config();
+    c.paper.participation_bps = 0;
+    engine = ready(c);
+    CHECK(engine->submit(buy(1, 1, 10'010, TimeInForce::ioc)) == Reject::none);
+    CHECK(engine->on_tick(quote(1, 2)));
+    CHECK(engine->position().quantity == 0);
+    CHECK(state(*engine, 1).status == Status::cancelled);
+    c.paper.participation_bps = 10'001;
+    engine = ready(c);
+    CHECK(engine->killed());
+}
+
 void pending_risk_and_validation() {
     auto c = config();
     c.risk.max_position = 10;
@@ -478,6 +512,7 @@ int main() {
     latency_and_ioc();
     quote_liquidity_and_fifo();
     fees_and_cash();
+    participation_cap_and_lot_rounding();
     pending_risk_and_validation();
     cancellation_safety();
     daily_loss_and_modify();

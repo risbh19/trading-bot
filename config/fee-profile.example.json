@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "status": "illustrative",
+  "broker": "",
+  "exchange": "",
+  "segment": "",
+  "currency": "INR",
+  "product": "cnc",
+  "valid_from": null,
+  "valid_through": null,
+  "verified_on": null,
+  "verified_by": "",
+  "evidence": "",
+  "sources": [],
+  "rates": {
+    "brokerage_ppm": 300,
+    "brokerage_cap_paise": 2000,
+    "stt_buy_ppm": 0,
+    "stt_sell_ppm": 250,
+    "exchange_ppm": 30,
+    "sebi_ppm": 1,
+    "stamp_buy_ppm": 30,
+    "gst_ppm": 180000
+  }
+}
