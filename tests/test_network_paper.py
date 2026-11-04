@@ -15,13 +15,19 @@ from unittest.mock import patch
 LIBRARY = Path(sys.argv.pop(1)).resolve()
 ROOT = Path(sys.argv.pop(1)).resolve()
 sys.path.insert(0, str(ROOT))
-from live.feeds import Quote
+from live.feeds import Quote, QuoteFeedError, QuoteFeedUnavailable
+from live.health import RetryPolicy, SessionHealth
 from live.native import PaperEngine
-from live.run import PaperSession, configuration, run_session
+from live.run import PaperSession, configuration, run_session, suspend_for_retry
 from live.recovery import SessionLock, create_manifest
 
 
 class NetworkPaperTests(unittest.TestCase):
+    def runner_args(self, root):
+        return argparse.Namespace(poll_seconds=15, max_source_age=1800, duration=5,
+                                  config=ROOT / 'config/network-paper.conf',
+                                  library=LIBRARY, output_dir=Path(root))
+
     def make_resumable_session(self, root, engine, *, resume=False, manifest=None):
         output = Path(root) / 'paper-session'
         config = ROOT / 'config/network-paper.conf'
@@ -277,6 +283,123 @@ class NetworkPaperTests(unittest.TestCase):
                 recovered.cancel_all(recovered.last_engine_time + 1)
                 self.assertEqual(engine.snapshot()['open_orders'], 0)
                 recovered.close()
+
+    def test_transient_failure_recovers_then_closed_market_stops_cleanly(self):
+        class Feed:
+            symbol = 'TEST.NS'
+            calls = 0
+            def fetch(self):
+                self.calls += 1
+                if self.calls == 1:
+                    raise QuoteFeedUnavailable('simulated timeout')
+                return Quote(self.symbol, 10000, int(time.time()) - 60)
+        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            feed = Feed()
+            code = asyncio.run(run_session(self.runner_args(temporary), feed,
+                                            retry_policy=RetryPolicy(base_delay_s=0.001)))
+            output = next(Path(temporary).iterdir())
+            summary = json.loads((output / 'summary.json').read_text())
+            health = json.loads((output / 'health.json').read_text())
+            alerts = [json.loads(line) for line in (output / 'alerts.jsonl').read_text().splitlines()]
+            self.assertEqual(code, 0)
+            self.assertEqual(feed.calls, 2)
+            self.assertEqual(summary['stop_reason'], 'market_closed')
+            self.assertFalse(summary['risk_halted'])
+            self.assertEqual(summary['open_orders'], 0)
+            self.assertEqual(health['transient_failures'], 1)
+            self.assertEqual(health['recoveries'], 1)
+            self.assertEqual(health['status'], 'stopped')
+            self.assertIn('feed_recovered', [row['event'] for row in alerts])
+
+    def test_retry_exhaustion_and_invalid_payloads_fail_closed(self):
+        for error, expected_calls in ((QuoteFeedUnavailable('simulated outage'), 2),
+                                      (QuoteFeedError('simulated bad payload'), 1)):
+            class Feed:
+                symbol = 'TEST.NS'
+                calls = 0
+                def fetch(self):
+                    self.calls += 1
+                    raise error
+            with self.subTest(error=error), tempfile.TemporaryDirectory() as temporary, \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                feed = Feed()
+                code = asyncio.run(run_session(self.runner_args(temporary), feed,
+                                                retry_policy=RetryPolicy(max_retries=1, base_delay_s=0.001)))
+                output = next(Path(temporary).iterdir())
+                summary = json.loads((output / 'summary.json').read_text())
+                health = json.loads((output / 'health.json').read_text())
+                self.assertEqual(code, 3)
+                self.assertEqual(feed.calls, expected_calls)
+                self.assertTrue(summary['risk_halted'])
+                self.assertEqual(summary['open_orders'], 0)
+                self.assertEqual(health['status'], 'halted')
+                self.assertEqual(health['validation_failures'], int(expected_calls == 1))
+
+    def test_retry_cancels_pending_orders_and_cannot_clear_a_stale_halt(self):
+        config = ROOT / 'config/network-paper.conf'
+        with tempfile.TemporaryDirectory() as temporary, PaperEngine(LIBRARY, config) as engine:
+            output = Path(temporary)
+            session = PaperSession(engine, configuration(config), 'TEST.NS', output)
+            health = SessionHealth(output, 'TEST.NS', 'test')
+            try:
+                session.accept(Quote('TEST.NS', 10000, 1000, market_open=True), 0, 1060)
+                quote = Quote('TEST.NS', 10100, 1060, market_open=True)
+                session.accept(quote, 10_000_000, 1120)
+                self.assertEqual(engine.snapshot()['open_orders'], 1)
+                delay = suspend_for_retry(session, health, RetryPolicy(),
+                                          QuoteFeedUnavailable('test timeout'), 20_000_000)
+                self.assertEqual(delay, 5)
+                self.assertEqual(engine.snapshot()['open_orders'], 0)
+                self.assertEqual(engine.snapshot()['position'], 0)
+                self.assertFalse(engine.snapshot()['killed'])
+                self.assertFalse(session.accept(quote, 30_000_000, 1130))
+                self.assertEqual(engine.snapshot()['position'], 0)
+                self.assertEqual(session.journal.transactions[-1][0]['op'], 'cancel_all')
+                session.heartbeat(session.last_tick_time + session.stale_after_ns + 1)
+                self.assertTrue(engine.snapshot()['killed'])
+                with self.assertRaisesRegex(RuntimeError, 'halted'):
+                    session.accept(Quote('TEST.NS', 10100, 1120, market_open=True),
+                                   session.last_engine_time + 1, 1180)
+            finally:
+                health.close()
+                session.close()
+
+    def test_invalid_quote_types_and_completed_bar_revisions_are_rejected(self):
+        config = ROOT / 'config/network-paper.conf'
+        with tempfile.TemporaryDirectory() as temporary, PaperEngine(LIBRARY, config) as engine:
+            session = PaperSession(engine, configuration(config), 'TEST.NS', Path(temporary))
+            try:
+                for quote in (Quote('TEST.NS', True, 1000), Quote('TEST.NS', 10000, True),
+                              Quote('TEST.NS', 10000, 1000, market_open=1),
+                              Quote('TEST.NS', 100_000_001, 1000)):
+                    with self.subTest(quote=quote), self.assertRaises(ValueError):
+                        session.accept(quote, 0, 1060)
+                self.assertEqual(session.quotes, 0)
+                session.accept(Quote('TEST.NS', 10000, 1000, market_open=True), 0, 1060)
+                with self.assertRaisesRegex(ValueError, 'revised'):
+                    session.accept(Quote('TEST.NS', 10001, 1000, market_open=True), 1, 1061)
+                self.assertEqual(session.last_quote.price_paise, 10000)
+                self.assertEqual(session.quotes, 1)
+            finally:
+                session.close()
+
+    def test_monitoring_write_failure_halts_before_fetch(self):
+        class Feed:
+            symbol = 'TEST.NS'
+            calls = 0
+            def fetch(self):
+                self.calls += 1
+                return Quote(self.symbol, 10000, int(time.time()) - 60)
+        with tempfile.TemporaryDirectory() as temporary, contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()), \
+                patch('live.health.atomic_json', side_effect=OSError('simulated monitoring disk failure')):
+            feed = Feed()
+            self.assertEqual(asyncio.run(run_session(self.runner_args(temporary), feed)), 3)
+            summary = json.loads(next(Path(temporary).glob('*/summary.json')).read_text())
+            self.assertEqual(feed.calls, 0)
+            self.assertTrue(summary['risk_halted'])
+            self.assertEqual(summary['open_orders'], 0)
 
 
 if __name__ == '__main__':
