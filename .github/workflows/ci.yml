@@ -31,3 +31,13 @@ jobs:
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DTRADING_SANITIZERS=ON
       - run: cmake --build build --parallel 2
       - run: ctest --test-dir build --output-on-failure
+  monitoring-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Prometheus configuration and alert rules
+        run: |
+          image=prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+          docker run --rm --entrypoint /bin/promtool --volume "$PWD/monitoring:/rules:ro" --workdir /rules "$image" check config prometheus.yml
+          docker run --rm --entrypoint /bin/promtool --volume "$PWD/monitoring:/rules:ro" --workdir /rules "$image" check rules alerts.yml
+          docker run --rm --entrypoint /bin/promtool --volume "$PWD/monitoring:/rules:ro" --workdir /rules "$image" test rules alerts.test.yml

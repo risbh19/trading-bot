@@ -17,6 +17,7 @@ ROOT = Path(sys.argv.pop(1)).resolve()
 sys.path.insert(0, str(ROOT))
 from live.feeds import Quote, QuoteFeedError, QuoteFeedUnavailable
 from live.health import RetryPolicy, SessionHealth
+from live.monitoring import SessionExporter
 from live.native import PaperEngine
 from live.run import PaperSession, configuration, run_session, suspend_for_retry
 from live.recovery import SessionLock, create_manifest
@@ -72,6 +73,9 @@ class NetworkPaperTests(unittest.TestCase):
             report = json.loads(report_path.read_text())
             self.assertEqual(report['stop_reason'], 'risk_halt')
             self.assertTrue(report['risk_halted'])
+            observed = SessionExporter(report_path.parent).snapshot()
+            self.assertTrue(observed.valid)
+            self.assertEqual(observed.state, 'halted')
 
     def test_real_engine_persists_and_reports_virtual_balance(self):
         config = ROOT / 'config/network-paper.conf'

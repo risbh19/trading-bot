@@ -18,6 +18,7 @@ ROOT = Path(sys.argv.pop(1)).resolve()
 sys.path.insert(0, str(ROOT))
 from live.feeds import Quote, QuoteFeedError, QuoteFeedUnavailable
 from live.health import RetryPolicy
+from live.monitoring import SessionExporter
 from live.portfolio_native import PaperPortfolioEngine
 from live.portfolio_run import run_portfolio
 from live.portfolio_session import PortfolioSession, PortfolioSpec
@@ -281,6 +282,10 @@ class PortfolioStreamTests(unittest.TestCase):
                 self.assertEqual(report['orders_accepted'], 1)
                 self.assertEqual(report['risk_halted'], stale)
                 self.assertEqual(json.loads((output / 'session.json').read_text())['resume_count'], 1)
+                self.assertEqual(json.loads((output / 'health.json').read_text())['resume_count'], 1)
+                observed = SessionExporter(output).snapshot()
+                self.assertTrue(observed.valid)
+                self.assertEqual(observed.state, 'halted' if stale else 'stopped')
                 if stale:
                     self.assertEqual(sum(feed.calls for feed in feeds.values()), 0)
                 with self.assertRaises(ValueError):

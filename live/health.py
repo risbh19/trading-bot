@@ -37,11 +37,12 @@ class RetryPolicy:
 class SessionHealth:
     """Local files only; counters reset each process, alerts append across resume."""
 
-    def __init__(self, output: Path, symbol: str, session_id: str):
+    def __init__(self, output: Path, symbol: str, session_id: str, *, resume_count=0):
         self.output = output
         self.alerts = (output / 'alerts.jsonl').open('a', encoding='utf-8')
         self.metrics = dict(schema_version=1, mode='paper', symbol=symbol, session_id=session_id,
                             counters_scope='current_process', started_utc_s=time.time(),
+                            resume_count=resume_count,
                             status='starting', consecutive_failures=0, next_retry_utc_s=None,
                             last_error=None, last_source_time_s=None, last_response_utc_s=None,
                             fetch_attempts=0, responses=0, accepted_quotes=0, duplicate_quotes=0,
