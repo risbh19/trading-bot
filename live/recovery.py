@@ -109,6 +109,7 @@ def _pid_is_alive(pid: int) -> bool:
             return False
         return True
 
+
 class SessionLock:
     """Exclusive lock; a lock with an unverifiable owner fails closed."""
 
@@ -164,26 +165,23 @@ class SessionLock:
 class SessionJournal:
     """Append-only JSONL log. Operations are durable before engine calls."""
 
-    def __init__(self, path: Path, *, resume: bool, symbol: str, config_sha256: str):
+    def __init__(self, path: Path, *, resume: bool, symbol: str, config_sha256: str, header=None):
         self.path = path
         self.records = []
+        expected = header if header is not None else {
+            'kind': 'header', 'format_version': FORMAT_VERSION,
+            'paper_api_version': API_VERSION, 'symbol': symbol,
+            'config_sha256': config_sha256,
+        }
         if resume:
             self.records = self._read_and_repair_tail()
-            if not self.records or self.records[0] != {
-                'kind': 'header', 'format_version': FORMAT_VERSION,
-                'paper_api_version': API_VERSION, 'symbol': symbol,
-                'config_sha256': config_sha256,
-            }:
+            if not self.records or self.records[0] != expected:
                 raise ValueError('Session journal header does not match its manifest/configuration')
             self.transactions = self._transactions(self.records[1:])
             self.fd = os.open(path, os.O_WRONLY | os.O_APPEND)
         else:
             self.fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_APPEND, 0o600)
-            header = {'kind': 'header', 'format_version': FORMAT_VERSION,
-                      'paper_api_version': API_VERSION, 'symbol': symbol,
-                      'config_sha256': config_sha256}
-            self.records = [header]
-            self._write(header)
+            self._write(expected)
             self.transactions = []
 
     @staticmethod

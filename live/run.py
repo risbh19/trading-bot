@@ -204,7 +204,10 @@ class PaperSession:
                     )
                 checkpoint = saved
             else:
-                checkpoint = self._checkpoint(operation, result, events, state)
+                # Recovery must retain the intent's original clock. Assigning
+                # "now" here would conceal downtime after a pre-checkpoint crash.
+                checkpoint = self._checkpoint(operation, result, events, state,
+                    wall_time_ns=operation.get('prepared_wall_time_ns', self.last_commit_wall_time_ns or 0))
                 self.journal.append_checkpoint(checkpoint)
             self._record_outputs(operation, result, events, state, checkpoint)
             self.next_operation_id = operation['id'] + 1
@@ -214,7 +217,8 @@ class PaperSession:
         self._close_derived()
 
     def _commit_operation(self, kind, fields, invoke=None):
-        operation = {'kind': 'operation', 'id': self.next_operation_id, 'op': kind, **fields}
+        operation = {'kind': 'operation', 'id': self.next_operation_id, 'op': kind,
+                     'prepared_wall_time_ns': time.time_ns(), **fields}
         self.journal.append_operation(operation)
         result, events, state = self._execute(operation) if invoke is None else self._execute_with(operation, invoke)
         checkpoint = self._checkpoint(operation, result, events, state)
