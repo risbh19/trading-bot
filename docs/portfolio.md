@@ -46,6 +46,6 @@ Audit rows add `instrument` before the ordinary native event fields. `position` 
 
 Clean completion cancels orders and marks inventory without liquidating or carrying it into another replay. A partial/failed input can leave diagnostic audit data; exit 0 means complete, 2 means argument/input/I/O failure, and 3 means a latched risk halt.
 
-This runner does not add a multi-symbol live quote service or durable streaming portfolio session. Replaying the saved input reproduces this offline account. The existing single-symbol public-feed runner and its `--resume` journal remain separate and unchanged in operation. Single-symbol research walk-forward evaluation does not automatically become a portfolio return calculation.
+Replaying the saved input reproduces this offline account. For public delayed multi-symbol prices, durable shared-account sessions and restart recovery, use the separate [streaming portfolio runner](portfolio-streaming.md). The existing single-symbol public-feed runner remains available. Single-symbol research walk-forward evaluation does not automatically become a portfolio return calculation.
 
 All prices/depth and fee defaults in the fixture remain illustrative. Correlations, FX, margin, settlement, corporate actions, exchange calendars, external broker fills and broker acknowledgments are not modeled.

@@ -1,6 +1,7 @@
 """Single-owner ctypes binding to the additive native paper-portfolio ABI."""
 
 import ctypes as c
+import hashlib
 from pathlib import Path
 import threading
 
@@ -26,6 +27,7 @@ class PaperPortfolioEngine:
     def __init__(self, library: Path, config: Path):
         self.owner = threading.get_ident()
         self.handle = None
+        self.binary_sha256 = hashlib.sha256(library.read_bytes()).hexdigest()
         self.library = c.CDLL(str(library.resolve()))
         declarations = {
             'portfolio_api_version': (c.c_int, []),
@@ -43,7 +45,10 @@ class PaperPortfolioEngine:
             'portfolio_pop_event': (c.c_int, [c.c_void_p, c.POINTER(PortfolioEvent)]),
         }
         for name, (result, arguments) in declarations.items():
-            function = getattr(self.library, name)
+            try:
+                function = getattr(self.library, name)
+            except AttributeError as error:
+                raise RuntimeError('Portfolio API unavailable; rebuild paper_engine from the updated source') from error
             function.restype, function.argtypes = result, arguments
         if (self.library.portfolio_api_version() != 1 or c.sizeof(PortfolioSnapshot) != 112 or
                 c.sizeof(InstrumentSnapshot) != 96 or c.sizeof(PortfolioEvent) != 128):

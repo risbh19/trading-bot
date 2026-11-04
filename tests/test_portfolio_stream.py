@@ -21,7 +21,7 @@ from live.health import RetryPolicy
 from live.portfolio_native import PaperPortfolioEngine
 from live.portfolio_run import run_portfolio
 from live.portfolio_session import PortfolioSession, PortfolioSpec
-from live.recovery import atomic_json
+from live.recovery import SessionLock, atomic_json
 from research.validation import FEE_KEYS, fee_total, read_config, setting
 
 CONFIG = ROOT / 'config/network-portfolio.json'
@@ -179,6 +179,19 @@ class PortfolioStreamTests(unittest.TestCase):
                     pass
             self.assertEqual((output / 'audit.csv').read_bytes(), original_audit)
 
+    def test_recovery_refuses_a_different_native_binary_fingerprint(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.session(temporary) as (session, engine, output):
+                self.prime(session)
+            original_audit = (output / 'audit.csv').read_bytes()
+            manifest = json.loads((output / 'session.json').read_text())
+            manifest['engine_sha256'] = '0' * 64
+            atomic_json(output / 'session.json', manifest)
+            with self.assertRaisesRegex(ValueError, 'binary differs'):
+                with self.session(temporary, resume=True):
+                    pass
+            self.assertEqual((output / 'audit.csv').read_bytes(), original_audit)
+
     def test_undurable_healthy_heartbeats_disconnect_and_clock_regression_replay_safely(self):
         with tempfile.TemporaryDirectory() as temporary:
             with self.session(temporary) as (session, engine, output):
@@ -221,9 +234,68 @@ class PortfolioStreamTests(unittest.TestCase):
             with ThreadPoolExecutor(max_workers=1) as pool:
                 with self.assertRaisesRegex(RuntimeError, 'owning thread'):
                     pool.submit(engine.snapshot).result()
+                next_id = session.next_id
+                with self.assertRaisesRegex(RuntimeError, 'owning thread'):
+                    pool.submit(session.suspend, 0, 'wrong thread').result()
+                self.assertEqual(session.next_id, next_id)
             with self.assertRaises(ValueError):
                 engine.tick(1, 0, 1, 100, 101, True)
             self.assertTrue(engine.snapshot()['killed'])
+
+    def test_checkpoint_write_failure_immediately_stops_the_native_account(self):
+        with tempfile.TemporaryDirectory() as temporary, self.session(temporary) as (session, engine, output):
+            self.prime(session)
+            with patch.object(session.journal, 'append_checkpoint', side_effect=OSError('offline journal disk failure')):
+                with self.assertRaises(OSError):
+                    session.accept(1, Quote('RELIANCE.NS', 10100, 1060, market_open=True), 10_000_000, 1120)
+            self.assertTrue(engine.snapshot()['killed'])
+            self.assertEqual(engine.snapshot()['open_orders'], 0)
+            self.assertFalse(session.report()['audit_complete'])
+
+    def test_full_resume_cancels_old_orders_and_stale_resume_never_fetches(self):
+        class Feed:
+            def __init__(self, symbol):
+                self.symbol, self.calls = symbol, 0
+            def fetch(self):
+                self.calls += 1
+                return Quote(self.symbol, 10000, int(time.time()) - 60)
+        for stale in (False, True):
+            with self.subTest(stale=stale), tempfile.TemporaryDirectory() as temporary, \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with self.session(temporary) as (session, engine, output):
+                    self.prime(session)
+                    session.accept(1, Quote('RELIANCE.NS', 10100, 1060, market_open=True), 10_000_000, 1120)
+                    if stale:
+                        session.journal.append_operation(dict(kind='operation', id=session.next_id,
+                            op='heartbeat', time_ns=20_000_000,
+                            prepared_wall_time_ns=time.time_ns() - 600_000_000_000))
+                feeds = {1: Feed('RELIANCE.NS'), 2: Feed('TCS.NS')}
+                args = self.args(temporary)
+                args.resume = output
+                code = asyncio.run(run_portfolio(args, feeds))
+                report = json.loads((output / 'summary.json').read_text())
+                self.assertEqual(code, 3 if stale else 0)
+                self.assertTrue(report['resumed'])
+                self.assertEqual(report['open_orders'], 0)
+                self.assertEqual(report['fills'], 0)
+                self.assertEqual(report['orders_accepted'], 1)
+                self.assertEqual(report['risk_halted'], stale)
+                self.assertEqual(json.loads((output / 'session.json').read_text())['resume_count'], 1)
+                if stale:
+                    self.assertEqual(sum(feed.calls for feed in feeds.values()), 0)
+                with self.assertRaises(ValueError):
+                    asyncio.run(run_portfolio(args, feeds))  # Finished accounts cannot reopen.
+
+    def test_active_portfolio_lock_prevents_a_second_runner(self):
+        spec = PortfolioSpec.load(CONFIG)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / 'session'
+            spec.create_bundle(output)
+            args = self.args(temporary)
+            args.resume = output
+            with SessionLock(output / 'session.lock'):
+                with self.assertRaisesRegex(RuntimeError, 'already running'):
+                    asyncio.run(run_portfolio(args))
 
     def args(self, root):
         return argparse.Namespace(config=CONFIG, library=LIBRARY, poll_seconds=15, duration=5,

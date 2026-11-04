@@ -2,6 +2,8 @@
 
 This mode connects public **delayed/indicative Indian equity prices** to the existing C++ `PaperBroker`. It uses virtual money and sends no orders to a broker. It needs no broker account, API key, deposit or additional Python packages.
 
+For several symbols sharing one capital budget and recovery journal, use the [multi-symbol portfolio runner](portfolio-streaming.md). Multiple independent single-symbol sessions represent separate virtual accounts.
+
 It is not a real-time NSE/BSE tick feed. Yahoo labels its [RELIANCE.NS quote](https://finance.yahoo.com/quote/RELIANCE.NS/) delayed; its [data-provider help](https://help.yahoo.com/kb/finance/article-exchanges-data-delays-sln2310.html) explains exchange-specific coverage. The public chart endpoint is undocumented and can change or become unavailable. An HTTP success does not make the underlying quote real-time.
 
 ## Start

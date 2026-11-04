@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import time
+import threading
 import uuid
 
 from .feeds import Quote, YahooQuoteFeed
@@ -126,7 +127,10 @@ class PortfolioSpec:
 
     def validate_bundle(self, output: Path):
         manifest = json.loads((output / 'session.json').read_text(encoding='utf-8'))
-        if (manifest.get('kind') != 'paper_portfolio' or manifest.get('format_version') != 1 or
+        if (not isinstance(manifest, dict) or not isinstance(manifest.get('session_id'), str) or
+                not manifest['session_id'] or type(manifest.get('resume_count')) is not int or
+                manifest['resume_count'] < 0 or
+                manifest.get('kind') != 'paper_portfolio' or manifest.get('format_version') != 1 or
                 manifest.get('portfolio_api_version') != 1 or manifest.get('status') != 'running' or
                 manifest.get('bundle_sha256') != self.fingerprint or manifest.get('identity') != self.identity):
             raise ValueError('Finished, incompatible or changed portfolio bundle; refusing recovery')
@@ -141,6 +145,13 @@ class PortfolioSpec:
 class PortfolioSession:
     def __init__(self, engine, spec: PortfolioSpec, output: Path, manifest, *, resume=False):
         self.engine, self.spec, self.output, self.manifest = engine, spec, output, manifest
+        self.owner = threading.get_ident()
+        if resume:
+            if manifest.get('engine_sha256') != engine.binary_sha256:
+                raise ValueError('Native portfolio binary differs from the saved session; refusing recovery')
+        else:
+            manifest['engine_sha256'] = engine.binary_sha256
+            atomic_json(output / 'session.json', manifest)
         self.session_id = manifest['session_id']
         self.sequences = dict.fromkeys(spec.by_id, 0)
         self.last_sources = dict.fromkeys(spec.by_id)
@@ -158,7 +169,8 @@ class PortfolioSession:
         self.terminal = self.clean_shutdown = self.journal_failed = False
         self.resumed = resume
         header = dict(kind='header', format_version=1, engine='paper_portfolio',
-                      portfolio_api_version=1, bundle_sha256=spec.fingerprint)
+                      portfolio_api_version=1, bundle_sha256=spec.fingerprint,
+                      engine_sha256=engine.binary_sha256)
         self.journal = SessionJournal(output / 'session.jsonl', resume=resume,
                                       symbol='portfolio', config_sha256=spec.fingerprint, header=header)
         suffix = '.recovery.tmp' if resume else ''
@@ -308,6 +320,8 @@ class PortfolioSession:
             self.next_id = operation['id'] + 1
 
     def _commit(self, kind, now, **fields):
+        if threading.get_ident() != self.owner:
+            raise RuntimeError('Portfolio journal must be called by its owning thread')
         operation = dict(kind='operation', id=self.next_id, op=kind, time_ns=now,
                          prepared_wall_time_ns=time.time_ns(), **fields)
         try:
@@ -321,6 +335,11 @@ class PortfolioSession:
             return result, state
         except Exception:
             self.journal_failed = True
+            try:
+                self.engine.disconnect()
+            except Exception:
+                pass
+            self.terminal = True
             raise
 
     def suspend(self, now, reason):
@@ -384,6 +403,7 @@ class PortfolioSession:
         state = self.engine.snapshot()
         report = dict(state, mode='paper', feed_status='delayed/indicative',
                       session_id=self.session_id, resumed=self.resumed, finished=finished,
+                      engine_sha256=self.manifest['engine_sha256'],
                       quotes=self.quotes, fills=self.fills, orders_accepted=self.accepted,
                       orders_rejected=self.rejected, max_drawdown_paise=self.drawdown,
                       stop_reason=self.stop_reason, error=self.error,
