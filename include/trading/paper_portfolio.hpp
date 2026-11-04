@@ -65,6 +65,7 @@ public:
     [[nodiscard]] bool killed() const noexcept { return reason_ != Reject::none; }
     [[nodiscard]] Reject kill_reason() const noexcept { return reason_; }
     [[nodiscard]] bool audit_failed() const noexcept { return audit_failed_; }
+    [[nodiscard]] bool execution_enabled() const noexcept { return execution_enabled_; }
     [[nodiscard]] Money initial_capital() const noexcept { return account_.initial_capital; }
     [[nodiscard]] bool ready() const noexcept {
         for (const auto& member : members_) if (!member.engine->book().ready()) return false;
@@ -137,7 +138,8 @@ public:
         drain(*member);
         assess();
         if (!killed() && member->config.strategy_enabled) {
-            const bool blocked = !ready() || !sessions_open() || member->engine->open_orders() != 0;
+            const bool blocked = !execution_enabled_ || !ready() || !sessions_open() ||
+                                 member->engine->open_orders() != 0;
             auto order = member->strategy.on_book(member->engine->book(), member->config.instrument,
                                                   member->engine->position().quantity, blocked,
                                                   member->last_id + 1);
@@ -163,6 +165,7 @@ public:
         }
         if (order.id <= member->last_id) return reject(order, Reject::duplicate, member);
         member->last_id = order.id; // Consume IDs for all rejections, including account-level ones.
+        if (!execution_enabled_) return reject(order, Reject::disconnected, member);
         if (order.type != OrderType::limit || order.product != Product::cnc ||
             (order.side != Side::buy && order.side != Side::sell) ||
             (order.tif != TimeInForce::day && order.tif != TimeInForce::ioc) ||
@@ -214,7 +217,18 @@ public:
         }
         assess();
     }
+    void suspend() noexcept {
+        execution_enabled_ = false;
+        cancel_all();
+    }
+    [[nodiscard]] bool resume_execution() noexcept {
+        assess();
+        if (killed() || !ready() || !sessions_open()) return false;
+        execution_enabled_ = true;
+        return true;
+    }
     void kill(Reject reason = Reject::killed) noexcept {
+        execution_enabled_ = false;
         if (!killed()) reason_ = reason == Reject::none ? Reject::killed : reason;
         for (auto& member : members_) {
             member.engine->kill(reason_);
@@ -363,6 +377,7 @@ private:
     Reject reason_{Reject::none};
     Reject pending_halt_{Reject::none};
     bool audit_failed_{};
+    bool execution_enabled_{true};
 };
 
 } // namespace trading
