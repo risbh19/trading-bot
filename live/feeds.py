@@ -6,6 +6,7 @@ are completed one-minute closes, not real-time executable quotes or depth.
 
 from dataclasses import dataclass
 from decimal import Decimal, DecimalException, ROUND_HALF_UP
+from email.utils import parsedate_to_datetime
 import json
 import math
 import re
@@ -17,6 +18,14 @@ from urllib.request import Request, urlopen
 
 class QuoteFeedError(RuntimeError):
     """The public feed could not provide a validated completed INR bar."""
+
+
+class QuoteFeedUnavailable(QuoteFeedError):
+    """A transport/server failure eligible for bounded retries."""
+
+    def __init__(self, message: str, *, retry_after_s=None):
+        super().__init__(message)
+        self.retry_after_s = retry_after_s
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,9 +71,13 @@ class YahooQuoteFeed:
             with urlopen(request, timeout=self.timeout_s) as response:
                 body = response.read(self.max_response_bytes + 1)
         except HTTPError as error:
-            raise QuoteFeedError(f"Yahoo quote feed unavailable (HTTP {error.code}); no quote accepted") from error
+            message = f"Yahoo quote feed unavailable (HTTP {error.code}); no quote accepted"
+            if error.code in (408, 429, 500, 502, 503, 504):
+                retry_after = self._retry_after(error.headers.get('Retry-After') if error.headers else None)
+                raise QuoteFeedUnavailable(message, retry_after_s=retry_after) from error
+            raise QuoteFeedError(message) from error
         except (URLError, TimeoutError, OSError) as error:
-            raise QuoteFeedError("Yahoo quote feed unavailable; no quote accepted") from error
+            raise QuoteFeedUnavailable("Yahoo quote feed unavailable; no quote accepted") from error
         if len(body) > self.max_response_bytes:
             raise QuoteFeedError("Yahoo quote response exceeds the allowed size")
         try:
@@ -76,6 +89,18 @@ class YahooQuoteFeed:
     @staticmethod
     def _invalid_constant(value: str):
         raise ValueError(f"Invalid JSON constant: {value}")
+
+    @staticmethod
+    def _retry_after(value):
+        if value is None:
+            return None
+        if value.strip().isdigit():
+            return int(value.strip())
+        try:
+            parsed = parsedate_to_datetime(value)
+            return max(0.0, parsed.timestamp() - time.time()) if parsed.tzinfo is not None else None
+        except (TypeError, ValueError, OverflowError):
+            return None
 
     @staticmethod
     def _timestamp(value, label: str) -> int:
@@ -124,6 +149,8 @@ class YahooQuoteFeed:
         previous_time = -1
         for raw_time, raw_price in zip(timestamps, closes):
             source_time = self._timestamp(raw_time, "bar time")
+            if source_time > now_s + 5:
+                raise QuoteFeedError("Yahoo bar timestamp is in the future")
             if source_time <= previous_time:
                 raise QuoteFeedError("Yahoo bar timestamps must strictly increase")
             previous_time = source_time
@@ -132,14 +159,16 @@ class YahooQuoteFeed:
             if not isinstance(raw_price, Decimal) and type(raw_price) is not int:
                 raise QuoteFeedError("Yahoo close prices must be finite numeric values")
             price = Decimal(raw_price)
-            if not price.is_finite() or price <= 0:
-                raise QuoteFeedError("Yahoo close prices must be positive and finite")
+            if not price.is_finite() or not 0 < price <= 1_000_000:
+                raise QuoteFeedError("Yahoo close prices must be positive, finite and within native bounds")
             # Chart timestamps are bar starts; exclude the still-forming minute.
             if source_time + self.interval_s <= now_s:
                 selected = source_time, price
         if selected is None:
             raise QuoteFeedError("Yahoo supplied no completed non-null one-minute close")
         source_time, price = selected
+        if market_open and not start <= source_time < source_time + self.interval_s <= end:
+            raise QuoteFeedError("Yahoo completed bar is outside the published regular session")
         try:
             paise = int((price * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
         except (DecimalException, OverflowError, ValueError) as error:

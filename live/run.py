@@ -14,7 +14,8 @@ import sys
 import time
 import uuid
 
-from .feeds import Quote, YahooQuoteFeed
+from .feeds import Quote, QuoteFeedError, QuoteFeedUnavailable, YahooQuoteFeed
+from .health import RetryPolicy, SessionHealth
 from .native import PaperEngine
 from .recovery import (SessionJournal, SessionLock, atomic_json, config_digest,
                        create_manifest, load_manifest)
@@ -82,6 +83,7 @@ class PaperSession:
         self.last_commit_wall_time_ns = None
         self.next_operation_id = 1
         self.terminal = False
+        self.clean_shutdown = False
 
         manifest_hash = self.manifest.get('config_sha256') or config_digest(
             json.dumps(settings, sort_keys=True, separators=(',', ':')).encode('utf-8'))
@@ -182,6 +184,8 @@ class PaperSession:
         self.ticks_file.flush()
         if state['audit_failed']:
             raise RuntimeError('C++ audit queue overflowed; paper session is incomplete')
+        if operation['op'] == 'shutdown' and not self.terminal:
+            self.clean_shutdown = True
         if operation['op'] == 'shutdown' or state['killed']:
             self.terminal = True
 
@@ -226,12 +230,16 @@ class PaperSession:
     def accept(self, quote: Quote, elapsed_ns: int, wall_time_s: int) -> bool:
         if self.engine.snapshot()['killed']:
             raise RuntimeError('Paper engine is halted; no more quotes may be accepted')
-        if quote.symbol != self.symbol or quote.currency != 'INR' or not quote.delayed:
+        if quote.symbol != self.symbol or quote.currency != 'INR' or quote.delayed is not True:
             raise ValueError('Unexpected provider symbol/currency/data classification')
+        if (type(quote.price_paise) is not int or not 0 < quote.price_paise <= 100_000_000 or
+                type(quote.source_time_s) is not int or quote.source_time_s < 0 or
+                type(quote.market_open) is not bool or type(wall_time_s) is not int or wall_time_s < 0 or
+                type(elapsed_ns) is not int or not 0 <= elapsed_ns <= 2**63 - 1):
+            raise ValueError('Invalid provider price/timestamp/session flag or runtime clock')
         age = wall_time_s - quote.source_time_s
-        self.last_quote, self.last_age = quote, max(0, age)
         self.raw.write(json.dumps({**asdict(quote), 'received_utc_s': wall_time_s,
-                                   'source_age_s': self.last_age, 'monotonic_ns': elapsed_ns},
+                                   'source_age_s': max(0, age), 'monotonic_ns': elapsed_ns},
                                   sort_keys=True) + '\n')
         self.raw.flush()
         if age < -5:
@@ -242,6 +250,9 @@ class PaperSession:
             raise ValueError('Provider timestamp regressed')
         # Repeated HTTP responses cannot replenish simulated liquidity or generate signals.
         if quote.market_open and quote.source_time_s == self.last_source:
+            if self.last_quote is not None and quote.price_paise != self.last_quote.price_paise:
+                raise ValueError('Provider revised an already accepted completed bar')
+            self.last_quote, self.last_age = quote, max(0, age)
             return False
         mid = quote.price_paise // self.tick_size * self.tick_size
         bid, ask = mid - self.spread, mid + self.spread
@@ -299,7 +310,7 @@ class PaperSession:
             'source_time_utc_s': self.last_quote.source_time_s if self.last_quote else None,
             'source_age_at_receipt_s': self.last_age, 'stop_reason': self.stop_reason,
             'error': self.error, 'finished': finished, 'audit_complete': not bool(state['audit_failed']),
-            'risk_halted': bool(state['killed']) or self.risk_halted,
+            'risk_halted': (bool(state['killed']) and not self.clean_shutdown) or self.risk_halted,
             'engine_kill_reason_code': state['kill_reason'],
             'fill_model': 'completed 1m close plus simulated spread, depth and latency',
             'terminal_inventory_is_marked_not_liquidated': True,
@@ -317,10 +328,20 @@ class PaperSession:
         self.journal.close()
 
 
-async def run_session(args, feed=None) -> int:
+def suspend_for_retry(session, health, policy, error, now_ns):
+    """Cancel durably before scheduling another request; never clear a risk halt."""
+    session.cancel_all(now_ns)
+    delay = policy.delay(health.metrics['consecutive_failures'] + 1, error.retry_after_s)
+    health.unavailable(error, delay)
+    health.flush(session.engine.snapshot(), force=True)
+    return delay
+
+
+async def run_session(args, feed=None, *, retry_policy=None) -> int:
     if (not 15 <= args.poll_seconds <= 60 or not 60 <= args.max_source_age <= 3600 or
             not math.isfinite(args.duration) or args.duration < 0):
         raise ValueError('poll-seconds must be 15..60, max-source-age 60..3600, duration nonnegative')
+    policy = retry_policy or RetryPolicy(max_retries=getattr(args, 'max_feed_retries', 3))
     feed = feed or YahooQuoteFeed(args.symbol)
     requested_config = args.config.read_bytes()
     resume_path = getattr(args, 'resume', None)
@@ -350,6 +371,8 @@ async def run_session(args, feed=None) -> int:
     print(f'Reports: {output}', flush=True)
     task = None
     session = None
+    health = None
+    monitoring_failed = False
     code = 0
     recovered_now = 0
     try:
@@ -360,6 +383,8 @@ async def run_session(args, feed=None) -> int:
             runtime_started = time.monotonic_ns()
             base_elapsed_ns = 0
             try:
+                health = SessionHealth(output, feed.symbol, session.session_id)
+                health.flush(engine.snapshot(), force=True)
                 if resume_path:
                     wall_now = time.time_ns()
                     if session.last_commit_wall_time_ns is None:
@@ -397,12 +422,29 @@ async def run_session(args, feed=None) -> int:
                             code = 3
                             break
                         if task is None and time.monotonic() >= next_poll:
+                            health.attempt()
                             task = asyncio.create_task(asyncio.to_thread(feed.fetch))
                         if task is not None and task.done():
-                            quote = task.result()
+                            try:
+                                quote = task.result()
+                            except QuoteFeedUnavailable as error:
+                                task = None
+                                # Suspend execution before waiting for transport recovery.
+                                # Fresh quote validation and the stale heartbeat remain mandatory.
+                                delay = suspend_for_retry(
+                                    session, health, policy, error,
+                                    base_elapsed_ns + time.monotonic_ns() - runtime_started)
+                                if delay is None:
+                                    raise
+                                next_poll = time.monotonic() + delay
+                                print(f'Feed unavailable; working paper orders cancelled. Retry in {delay:g}s.',
+                                      file=sys.stderr, flush=True)
+                                continue
                             task = None
                             changed = session.accept(
                                 quote, base_elapsed_ns + time.monotonic_ns() - runtime_started, int(time.time()))
+                            health.received(quote, changed)
+                            health.flush(engine.snapshot(), force=True)
                             report = session.report()
                             print(f"{quote.symbol}: INR {money(quote.price_paise)} | source age {session.last_age}s | "
                                   f"{'new quote' if changed else 'unchanged'} | virtual equity INR "
@@ -417,6 +459,7 @@ async def run_session(args, feed=None) -> int:
                                 print('Regular market session is closed; no virtual order was enabled by this quote.', flush=True)
                                 break
                             next_poll = time.monotonic() + args.poll_seconds
+                        health.flush(engine.snapshot())
                         await asyncio.sleep(0.1)
                     if stop.is_set():
                         session.stop_reason = 'interrupted'
@@ -428,6 +471,15 @@ async def run_session(args, feed=None) -> int:
                 session.stop_reason = 'feed_or_io_error'
                 session.error = str(error)
                 code = 3
+                if health is not None:
+                    try:
+                        health.metrics['last_error'] = str(error)
+                        if isinstance(error, (QuoteFeedError, ValueError)) and not isinstance(error, QuoteFeedUnavailable):
+                            health.metrics['validation_failures'] += 1
+                        health.transition('halted', 'session_error', error=str(error))
+                        health.flush(engine.snapshot(), force=True)
+                    except OSError:
+                        monitoring_failed = True
                 print(f'Paper trading stopped: {error}', file=sys.stderr, flush=True)
             finally:
                 if engine.snapshot()['killed'] and code == 0:
@@ -441,6 +493,21 @@ async def run_session(args, feed=None) -> int:
                     session.error = session.error or f'Could not durably stop paper engine: {error}'
                     engine.shutdown()
                 report = session.report(finished=True)
+                if health is not None and not monitoring_failed:
+                    try:
+                        health.metrics.update(stop_reason=session.stop_reason,
+                                              risk_halted=report['risk_halted'],
+                                              last_error=session.error or health.metrics['last_error'],
+                                              next_retry_utc_s=None)
+                        health.transition('halted' if code else 'stopped',
+                                          'session_halted' if code else 'session_stopped',
+                                          reason=session.stop_reason)
+                        health.flush(engine.snapshot(), force=True)
+                    except OSError as error:
+                        code = 3
+                        session.stop_reason = 'monitoring_io_error'
+                        session.error = str(error)
+                        report = session.report(finished=True)
                 manifest['status'] = 'finished'
                 manifest['finished_utc'] = datetime.now(timezone.utc).isoformat()
                 manifest['resume_count'] = session.resume_count
@@ -453,6 +520,8 @@ async def run_session(args, feed=None) -> int:
             await asyncio.gather(task, return_exceptions=True)
         if session is not None:
             session.close()
+        if health is not None:
+            health.close()
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
         lock.release()
@@ -466,6 +535,7 @@ def main() -> int:
     parser.add_argument('--library', type=Path)
     parser.add_argument('--poll-seconds', type=float, default=15)
     parser.add_argument('--max-source-age', type=int, default=1800)
+    parser.add_argument('--max-feed-retries', type=int, default=3, help='0..10 retries for transient transport/server errors')
     parser.add_argument('--duration', type=float, default=0, help='0 runs until stop, closed market or error')
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'reports/network-paper')
     parser.add_argument('--resume', type=Path, help='Recover a running session from its report directory')
