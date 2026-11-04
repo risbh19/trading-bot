@@ -9,7 +9,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from live.feeds import QuoteFeedError, YahooQuoteFeed
+from live.feeds import QuoteFeedError, QuoteFeedUnavailable, YahooQuoteFeed
 
 NOW = 1_000
 
@@ -147,6 +147,33 @@ class QuoteFeedTests(unittest.TestCase):
     def test_oversized_response_rejected(self):
         with self.assertRaises(QuoteFeedError):
             self.fetch(raw=b" " * (YahooQuoteFeed.max_response_bytes + 1))
+
+    def test_transient_http_errors_respect_retry_after_and_permanent_errors_do_not_retry(self):
+        for code, header, expected in ((429, '20', 20), (503, 'Thu, 01 Jan 1970 00:17:10 GMT', 30)):
+            error = HTTPError('https://query1.finance.yahoo.com', code, 'Unavailable',
+                              {'Retry-After': header}, None)
+            with self.subTest(code=code), patch('live.feeds.urlopen', side_effect=error), \
+                    patch('live.feeds.time.time', return_value=NOW):
+                with self.assertRaises(QuoteFeedUnavailable) as caught:
+                    YahooQuoteFeed('RELIANCE.NS').fetch()
+                self.assertEqual(caught.exception.retry_after_s, expected)
+        error = HTTPError('https://query1.finance.yahoo.com', 404, 'Missing', {}, None)
+        with patch('live.feeds.urlopen', side_effect=error):
+            with self.assertRaises(QuoteFeedError) as caught:
+                YahooQuoteFeed('RELIANCE.NS').fetch()
+            self.assertNotIsInstance(caught.exception, QuoteFeedUnavailable)
+
+    def test_future_out_of_session_and_out_of_native_range_bars_are_rejected(self):
+        changes = [
+            lambda result: result.update(timestamp=[800, 860, 920, NOW + 60]),
+            lambda result: result['meta']['currentTradingPeriod']['regular'].update(start=950),
+            lambda result: result['indicators']['quote'][0].update(close=[1_000_001] * 4),
+        ]
+        for change in changes:
+            data = fixture()
+            change(data['chart']['result'][0])
+            with self.subTest(data=data), self.assertRaises(QuoteFeedError):
+                self.fetch(data)
 
     def test_extreme_decimal_exponents_fail_closed(self):
         body = json.dumps(fixture()).encode()

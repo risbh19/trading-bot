@@ -68,6 +68,7 @@ The C++ `Engine` exposes `submit`, `modify`, `cancel`, `heartbeat`, `disconnect`
 - Cumulative per-order fees with configurable brokerage, STT, exchange, SEBI, stamp duty and GST components.
 - Deterministic audit/replay, independent cash/fee/PnL/liquidity reconciliation, allocation checks and latency percentile harness.
 - Research input/config snapshots and hashes, execution-cost scenarios, chronological train/test selection and explicit fee evidence. See the [research guide](docs/research.md).
+- Bounded public-feed retries that cancel pending orders first, source-quality checks, local health metrics and transition alerts.
 
 ## Project layout
 
@@ -99,4 +100,4 @@ Fee defaults are illustrative arithmetic fixtures, not current CNC/MIS/NRML tari
 
 The harness reports p50/p90/p99/p99.9 and a timer baseline. It measures in-memory book/strategy/risk/paper matching with audit enqueueing; it excludes CSV, disk, network and broker/exchange processing. A microsecond engine measurement is not an exchange tick-to-trade guarantee. Optional tuning: `-DTRADING_NATIVE=ON`, `-DTRADING_LTO=ON`; sanitizer checks: `-DTRADING_SANITIZERS=ON` on supported GCC/Clang hosts.
 
-See [architecture](docs/architecture.md), [operations and roadmap](docs/operations.md), [research validation](docs/research.md), and [validation](docs/validation.md). Durable paper recovery/reconciliation and the first P1 research improvements are implemented. Remaining P1 work includes broker-specific fee/data validation, feed reconnect/data quality, multi-symbol portfolio risk, metrics and alerts.
+See [architecture](docs/architecture.md), [operations and roadmap](docs/operations.md), [research validation](docs/research.md), and [validation](docs/validation.md). Durable paper recovery, research validation, public-feed resilience and local health reporting are implemented. Remaining P1 work includes broker-specific fee/data validation and streaming-feed integration, multi-symbol portfolio risk and external monitoring integration.

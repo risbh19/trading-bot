@@ -48,7 +48,11 @@ The starting capital is added to net trading cash flow for the displayed virtual
 
 Pending buys reserve worst-case turnover and remaining cumulative fees. Both submission and fill-time checks prevent a virtual cash overdraft. Partial fills, cancellation and completed sales release/update reservations. A cash rejection appears as `funds` in the audit.
 
-An HTTP/schema/currency error, regressing provider timestamp or stale open-session quote stops the session and cancels working paper orders. There is no automatic synthetic fallback or automatic restart. Source age is checked separately from the monotonic clock used by the engine. The default source-age ceiling is 30 minutes; the default unique-quote silence limit is 180 seconds. Provider delay is not hidden by resetting its source timestamp.
+Transport timeouts/connection errors and HTTP 408, 429, 500, 502, 503 or 504 permit bounded retries. Working paper orders are durably cancelled before waiting. The default allows three retries after the initial failure, with 5/10/20-second backoff. Server `Retry-After` seconds or HTTP dates can extend a wait up to 60 seconds; a longer requested wait stops the session rather than polling too early. Set `--max-feed-retries 0` (PowerShell: `-MaxFeedRetries 0`) to stop on the first failure; the allowed retry count is 0..10 and backoff never exceeds 60 seconds.
+
+The owner-thread heartbeat continues during requests and retry waits. A stale-feed or other risk halt remains latched and cannot be cleared by a successful HTTP response. Exhausted retries, permanent HTTP errors, invalid payloads/currency, regressing or revised completed bars, future/out-of-session data and stale open-session quotes stop the session. There is no synthetic fallback. Existing inventory remains held and marked; cancelling pending orders does not liquidate it.
+
+Repeated responses cannot refresh executable depth, generate signals, reset the engine's unique-quote clock or mark a degraded feed recovered. Recovery is reported only when a validated new source timestamp is accepted. Source age is checked separately from the monotonic engine clock. The default source-age ceiling is 30 minutes; unique-quote silence is limited to 180 seconds. Provider delay is not hidden by resetting its timestamp.
 
 Outside the regular-session window published in the feed, the runner records the closing quote and stops with `market_closed`. It does not trade after hours. During an open session, Ctrl+C stops at the next event-loop boundary. End-of-session cancellation does not automatically liquidate inventory.
 
@@ -79,5 +83,9 @@ Find the path printed in the console, under `reports/network-paper/<UTC timestam
 | `source-quotes.jsonl` | Provider price and original bar timestamp plus receipt time. |
 | `ticks.csv` | Normalized simulation quotes accepted by the C++ engine. |
 | `config.conf` | Exact copied configuration for this session. |
+| `health.json` | Atomic health snapshot: retry/poll/quote/error counters, source age, next retry, position/PnL and engine state. |
+| `alerts.jsonl` | Local transition events for feed unavailability/recovery, waiting for a fresh quote and final stops. |
 
-`finished=true` distinguishes a closed session from an intermediate report. A market-closed connection check can correctly show zero orders/fills. Exit `3` means a feed/risk stop; `2` means startup/argument failure. The report preserves residual inventory and labels all data delayed/indicative.
+`finished=true` distinguishes a closed session from an intermediate report. A market-closed connection check can correctly show zero orders/fills. Clean shutdown now keeps `risk_halted=false`; the native engine is still intentionally killed to prevent later orders, so `engine_killed=true` in final health is expected. Exit `3` means a feed/risk/monitoring failure; `2` means startup/argument failure. Residual inventory and the delayed/indicative label remain visible.
+
+Health counters explicitly cover the current process and restart at resume; the durable ledger keeps cumulative session activity. Health snapshots refresh at transitions, on responses and at most every five seconds during waits. Alerts append across resume and suppress repeated identical outage states. These files and console notices are local: no email, webhook or external notification is sent. Monitoring write failure stops paper execution. A broker-specific streaming adapter, authentication and websocket resubscription still require a selected broker.
