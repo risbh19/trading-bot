@@ -1,0 +1,50 @@
+groups:
+  - name: paper-session
+    interval: 5s
+    rules:
+      - alert: PaperExporterDown
+        expr: up{job="paper-session"} == 0
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: Paper-session exporter is unreachable
+
+      - alert: PaperSnapshotInvalid
+        expr: trading_paper_snapshot_valid{job="paper-session"} == 0
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: Paper-session reports cannot be validated
+
+      - alert: PaperSessionStale
+        expr: |
+          (trading_paper_snapshot_valid{job="paper-session"} == 1)
+          and on(job, instance) (trading_paper_snapshot_fresh{job="paper-session"} == 0)
+          and on(job, instance) (trading_paper_state{job="paper-session",state="stopped"} == 0)
+          and on(job, instance) (trading_paper_state{job="paper-session",state="halted"} == 0)
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: Running paper-session reports stopped updating
+
+      - alert: PaperSessionHalted
+        expr: trading_paper_halted{job="paper-session"} == 1
+        labels:
+          severity: warning
+        annotations:
+          summary: Paper session reported a failure or risk halt
+
+      - alert: PaperSessionWaiting
+        expr: |
+          (trading_paper_snapshot_valid{job="paper-session"} == 1)
+          and on(job, instance) (trading_paper_snapshot_fresh{job="paper-session"} == 1)
+          and on(job, instance) (trading_paper_running{job="paper-session"} == 1)
+          and on(job, instance) (trading_paper_healthy{job="paper-session"} == 0)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: Paper session continues waiting for healthy source data

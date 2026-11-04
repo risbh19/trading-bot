@@ -387,7 +387,8 @@ async def run_session(args, feed=None, *, retry_policy=None) -> int:
             runtime_started = time.monotonic_ns()
             base_elapsed_ns = 0
             try:
-                health = SessionHealth(output, feed.symbol, session.session_id)
+                health = SessionHealth(output, feed.symbol, session.session_id,
+                                       resume_count=session.resume_count)
                 health.flush(engine.snapshot(), force=True)
                 if resume_path:
                     wall_now = time.time_ns()
@@ -407,6 +408,7 @@ async def run_session(args, feed=None, *, retry_policy=None) -> int:
                     manifest['resume_count'] = int(manifest.get('resume_count', 0)) + 1
                     session.resume_count = manifest['resume_count']
                     atomic_json(output / 'session.json', manifest)
+                    health.metrics['resume_count'] = session.resume_count
                 if session.terminal or engine.snapshot()['killed']:
                     session.stop_reason = 'risk_halt' if engine.snapshot()['killed'] else 'already_stopped'
                     session.risk_halted = bool(engine.snapshot()['killed'])

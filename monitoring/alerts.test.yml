@@ -1,0 +1,231 @@
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 5s
+
+tests:
+  - name: healthy session does not alert
+    interval: 5s
+    input_series:
+      - series: 'up{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x60'
+      - series: 'trading_paper_snapshot_valid{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x60'
+      - series: 'trading_paper_snapshot_fresh{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x60'
+      - series: 'trading_paper_healthy{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x60'
+      - series: 'trading_paper_running{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x60'
+      - series: 'trading_paper_halted{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x60'
+      - series: 'trading_paper_state{job="paper-session",instance="127.0.0.1:9400",state="stopped"}'
+        values: '0+0x60'
+      - series: 'trading_paper_state{job="paper-session",instance="127.0.0.1:9400",state="halted"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PaperExporterDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: PaperSnapshotInvalid
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: PaperSessionStale
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: PaperSessionHalted
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: PaperSessionWaiting
+        exp_alerts: []
+
+  - name: unreachable exporter alerts after thirty seconds
+    interval: 5s
+    input_series:
+      - series: 'up{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x12'
+    alert_rule_test:
+      - eval_time: 25s
+        alertname: PaperExporterDown
+        exp_alerts: []
+      - eval_time: 30s
+        alertname: PaperExporterDown
+        exp_alerts:
+          - exp_labels:
+              job: paper-session
+              instance: 127.0.0.1:9400
+              severity: warning
+            exp_annotations:
+              summary: Paper-session exporter is unreachable
+
+  - name: invalid snapshot has its own alert rather than stale or halted
+    interval: 5s
+    input_series:
+      - series: 'up{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x12'
+      - series: 'trading_paper_snapshot_valid{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x12'
+      - series: 'trading_paper_snapshot_fresh{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x12'
+      - series: 'trading_paper_running{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x12'
+      - series: 'trading_paper_healthy{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x12'
+      - series: 'trading_paper_halted{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x12'
+      - series: 'trading_paper_state{job="paper-session",instance="127.0.0.1:9400",state="stopped"}'
+        values: '0+0x12'
+      - series: 'trading_paper_state{job="paper-session",instance="127.0.0.1:9400",state="halted"}'
+        values: '0+0x12'
+    alert_rule_test:
+      - eval_time: 10s
+        alertname: PaperSnapshotInvalid
+        exp_alerts: []
+      - eval_time: 15s
+        alertname: PaperSnapshotInvalid
+        exp_alerts:
+          - exp_labels:
+              job: paper-session
+              instance: 127.0.0.1:9400
+              severity: warning
+            exp_annotations:
+              summary: Paper-session reports cannot be validated
+      - eval_time: 1m
+        alertname: PaperSessionStale
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: PaperSessionHalted
+        exp_alerts: []
+      - eval_time: 1m
+        alertname: PaperSessionWaiting
+        exp_alerts: []
+
+  - name: stale nonterminal session alerts after thirty seconds
+    interval: 5s
+    input_series:
+      - series: 'trading_paper_snapshot_valid{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x12'
+      - series: 'trading_paper_snapshot_fresh{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x12'
+      - series: 'trading_paper_state{job="paper-session",instance="127.0.0.1:9400",state="stopped"}'
+        values: '0+0x12'
+      - series: 'trading_paper_state{job="paper-session",instance="127.0.0.1:9400",state="halted"}'
+        values: '0+0x12'
+    alert_rule_test:
+      - eval_time: 25s
+        alertname: PaperSessionStale
+        exp_alerts: []
+      - eval_time: 30s
+        alertname: PaperSessionStale
+        exp_alerts:
+          - exp_labels:
+              job: paper-session
+              instance: 127.0.0.1:9400
+              severity: warning
+            exp_annotations:
+              summary: Running paper-session reports stopped updating
+
+  - name: clean stopped session remains quiet after reports age
+    interval: 5s
+    input_series:
+      - series: 'up{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x60'
+      - series: 'trading_paper_snapshot_valid{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x60'
+      - series: 'trading_paper_snapshot_fresh{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x3 0+0x56'
+      - series: 'trading_paper_healthy{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x60'
+      - series: 'trading_paper_running{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x60'
+      - series: 'trading_paper_halted{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x60'
+      - series: 'trading_paper_state{job="paper-session",instance="127.0.0.1:9400",state="stopped"}'
+        values: '1+0x60'
+      - series: 'trading_paper_state{job="paper-session",instance="127.0.0.1:9400",state="halted"}'
+        values: '0+0x60'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: PaperExporterDown
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: PaperSnapshotInvalid
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: PaperSessionStale
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: PaperSessionHalted
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: PaperSessionWaiting
+        exp_alerts: []
+
+  - name: halted session alerts immediately and is not a stale-session alert
+    interval: 5s
+    input_series:
+      - series: 'trading_paper_snapshot_valid{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x12'
+      - series: 'trading_paper_snapshot_fresh{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x12'
+      - series: 'trading_paper_halted{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x12'
+      - series: 'trading_paper_state{job="paper-session",instance="127.0.0.1:9400",state="stopped"}'
+        values: '0+0x12'
+      - series: 'trading_paper_state{job="paper-session",instance="127.0.0.1:9400",state="halted"}'
+        values: '1+0x12'
+    alert_rule_test:
+      - eval_time: 0s
+        alertname: PaperSessionHalted
+        exp_alerts:
+          - exp_labels:
+              job: paper-session
+              instance: 127.0.0.1:9400
+              severity: warning
+            exp_annotations:
+              summary: Paper session reported a failure or risk halt
+      - eval_time: 1m
+        alertname: PaperSessionStale
+        exp_alerts: []
+
+  - name: persistent waiting alerts after two minutes
+    interval: 5s
+    input_series:
+      - series: 'trading_paper_snapshot_valid{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x30'
+      - series: 'trading_paper_snapshot_fresh{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x30'
+      - series: 'trading_paper_running{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x30'
+      - series: 'trading_paper_healthy{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 115s
+        alertname: PaperSessionWaiting
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: PaperSessionWaiting
+        exp_alerts:
+          - exp_labels:
+              job: paper-session
+              instance: 127.0.0.1:9400
+              severity: warning
+            exp_annotations:
+              summary: Paper session continues waiting for healthy source data
+
+  - name: recovery before waiting threshold clears the pending alert
+    interval: 5s
+    input_series:
+      - series: 'trading_paper_snapshot_valid{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x30'
+      - series: 'trading_paper_snapshot_fresh{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x30'
+      - series: 'trading_paper_running{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '1+0x30'
+      - series: 'trading_paper_healthy{job="paper-session",instance="127.0.0.1:9400"}'
+        values: '0+0x11 1+0x18'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: PaperSessionWaiting
+        exp_alerts: []

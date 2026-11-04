@@ -94,6 +94,7 @@ class PortfolioMonitor:
                 source_age_s=max(0, time.time() - source_time) if source_time is not None else None)
         atomic_json(self.session.output / 'health.json', dict(schema_version=1, mode='paper',
             counters_scope='current_process', started_utc_s=self.started, updated_utc_s=time.time(),
+            resume_count=self.session.manifest['resume_count'],
             session_id=self.session.session_id, status=status, account=snapshot, sources=sources,
             waiting_for_fresh_quotes=[self.session.spec.by_id[i]['symbol'] for i in sorted(self.session.pending)],
             stop_reason=self.session.stop_reason, error=self.session.error))

@@ -67,6 +67,8 @@ if(Python3_Interpreter_FOUND)
         $<TARGET_FILE:paper_trader> ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(research PROPERTIES TIMEOUT 90)
     add_test(NAME feed_health COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_health.py)
+    add_test(NAME monitoring COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_monitoring.py)
+    set_tests_properties(monitoring PROPERTIES TIMEOUT 30)
     add_test(NAME session_lock COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_session_lock.py)
     set_tests_properties(session_lock PROPERTIES TIMEOUT 30)
     add_test(NAME portfolio_replay COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_portfolio_replay.py

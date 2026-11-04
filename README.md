@@ -102,4 +102,12 @@ Fee defaults are illustrative arithmetic fixtures, not current CNC/MIS/NRML tari
 
 The harness reports p50/p90/p99/p99.9 and a timer baseline. It measures in-memory book/strategy/risk/paper matching with audit enqueueing; it excludes CSV, disk, network and broker/exchange processing. A microsecond engine measurement is not an exchange tick-to-trade guarantee. Optional tuning: `-DTRADING_NATIVE=ON`, `-DTRADING_LTO=ON`; sanitizer checks: `-DTRADING_SANITIZERS=ON` on supported GCC/Clang hosts.
 
-See [architecture](docs/architecture.md), [operations and roadmap](docs/operations.md), [research validation](docs/research.md), [paper portfolio](docs/portfolio.md), [portfolio streaming/recovery](docs/portfolio-streaming.md), and [validation](docs/validation.md). Durable single/multi-symbol paper sessions, research validation, public-feed resilience, local health reporting and shared-account portfolio risk are implemented. Remaining work includes broker-specific fee/data validation, authenticated streams and external monitoring integration.
+Read-only Prometheus monitoring is available for either network runner:
+
+```sh
+python -m live.monitoring --session reports/network-portfolio/SESSION
+```
+
+Pass the runner's actual session directory. The loopback exporter reports stale, invalid, paused, stopped and halted sessions separately; [monitoring](docs/monitoring.md) includes metrics, scrape configuration and tested alert rules.
+
+See [architecture](docs/architecture.md), [operations and roadmap](docs/operations.md), [research validation](docs/research.md), [paper portfolio](docs/portfolio.md), [portfolio streaming/recovery](docs/portfolio-streaming.md), and [validation](docs/validation.md). Durable single/multi-symbol paper sessions, research validation, public-feed resilience, local health reporting, Prometheus integration and shared-account portfolio risk are implemented. Remaining work includes broker-specific fee/data validation, authenticated streams and notification receiver/deployment setup.
