@@ -118,6 +118,12 @@ try {
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'mobile layout fits viewport');
   await screenshot('dashboard-mobile');
   await send('Emulation.setDeviceMetricsOverride', {width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false});
+  await evaluate("globalThis.originalDateNow=Date.now;Date.now=()=>originalDateNow()+60000");
+  await until("document.getElementById('status-title').textContent === 'Report out of date'", 'wall-clock advance expires cached data');
+  assert.equal(await evaluate("document.getElementById('equity').textContent"), '—');
+  await evaluate('Date.now=originalDateNow');
+  await refresh();
+  await until("document.getElementById('status-title').textContent === 'Healthy'", 'fresh data after clock correction');
 
   data.sources[0].symbol = '<img src=x onerror="globalThis.__xss=1">';
   await refresh();

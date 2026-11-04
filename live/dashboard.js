@@ -15,10 +15,13 @@
   const byId = id => document.getElementById(id);
   const money = new Intl.NumberFormat('en-IN', {style: 'currency', currency: 'INR', maximumFractionDigits: 2});
   const count = new Intl.NumberFormat('en-IN', {maximumFractionDigits: 0});
-  let last = null, receivedAt = 0, inFlight = false, connected = false;
+  let last = null, receivedAt = 0, receivedWall = 0, inFlight = false, connected = false;
   let requestGeneration = 0, activeController = null;
   const finite = value => typeof value === 'number' && Number.isFinite(value);
-  const text = (id, value) => { byId(id).textContent = value; };
+  const text = (id, value) => {
+    const node = byId(id);
+    if (node.textContent !== value) node.textContent = value;
+  };
   const ageText = value => !finite(value) ? '—' : value < 60 ? Math.floor(value) + 's' :
     value < 3600 ? Math.floor(value / 60) + 'm ' + Math.floor(value % 60) + 's' :
     Math.floor(value / 3600) + 'h ' + Math.floor(value % 3600 / 60) + 'm';
@@ -65,7 +68,10 @@
   }
   function render() {
     if (!last || !connected) return;
-    const elapsed = Math.max(0, (performance.now() - receivedAt) / 1000);
+    // Either clock can advance conservatively; some hosts pause the monotonic
+    // clock during system sleep without delivering a tab visibility event.
+    const elapsed = Math.max(0, (performance.now() - receivedAt) / 1000,
+      (Date.now() - receivedWall) / 1000);
     const age = last.valid ? last.report_age_seconds + elapsed : null;
     const fresh = last.valid && last.fresh && age <= last.max_age_seconds;
     clearValues();
@@ -114,6 +120,7 @@
     const controller = new AbortController();
     activeController = controller;
     const startedAt = performance.now();
+    const startedWall = Date.now();
     const timeout = setTimeout(() => controller.abort(), 4000);
     byId('refresh').disabled = true;
     try {
@@ -123,12 +130,14 @@
       if (generation !== requestGeneration) return;
       // Charge the entire request duration against freshness; a delayed response
       // cannot turn an already-expired snapshot healthy again.
-      const travel = Math.max(0, (performance.now() - startedAt) / 1000);
+      const travel = Math.max(0, (performance.now() - startedAt) / 1000,
+        (Date.now() - startedWall) / 1000);
       if (data.valid) data.report_age_seconds += travel;
       for (const source of data.sources) if (source.source_age_seconds !== null) source.source_age_seconds += travel;
       last = data;
       connected = true;
       receivedAt = performance.now();
+      receivedWall = Date.now();
       render();
     } catch (_) {
       if (generation === requestGeneration) disconnected();
