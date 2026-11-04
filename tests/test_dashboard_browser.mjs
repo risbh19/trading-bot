@@ -52,7 +52,12 @@ await new Promise(resolveListen => server.listen(0, '127.0.0.1', resolveListen))
 const url = 'http://127.0.0.1:' + server.address().port + '/';
 const chrome = spawn(chromePath, ['--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run',
   '--no-default-browser-check', '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0',
-  '--user-data-dir=' + profile, 'about:blank'], {stdio: 'ignore', windowsHide: true});
+  '--user-data-dir=' + profile, 'about:blank'], {stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true});
+let chromeError = '';
+chrome.stderr?.setEncoding('utf8');
+chrome.stderr?.on('data', chunk => {
+  chromeError = (chromeError + chunk).slice(-8000);
+});
 let ws;
 const sleep = ms => new Promise(resolveSleep => setTimeout(resolveSleep, ms));
 const pending = new Map();
@@ -90,11 +95,12 @@ async function screenshot(name) {
 }
 try {
   let port;
-  for (let attempt = 0; attempt < 200; attempt++) {
+  for (let attempt = 0; attempt < 600; attempt++) {
+    if (chrome.exitCode !== null) break;
     try { port = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).split('\n')[0]; break; }
     catch { await sleep(50); }
   }
-  assert.ok(port, 'Chrome started its isolated debugging endpoint');
+  assert.ok(port, 'Chrome started its isolated debugging endpoint' + (chromeError ? '\n' + chromeError.trim() : ''));
   const pages = await (await fetch('http://127.0.0.1:' + port + '/json/list')).json();
   ws = new WebSocket(pages.find(page => page.type === 'page').webSocketDebuggerUrl);
   await new Promise((resolveOpen, reject) => { ws.addEventListener('open', resolveOpen, {once: true}); ws.addEventListener('error', reject, {once: true}); });
