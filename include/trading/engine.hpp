@@ -16,11 +16,19 @@ struct EngineConfig {
     Money initial_capital_paise{0}; // Zero preserves unconstrained historical replay.
 };
 
+// Optional single-owner account guard. It may approve/reject and inspect state;
+// callbacks must not mutate/re-enter an Engine. Standalone engines use no guard.
+struct ExecutionGuard {
+    void* context{};
+    Reject (*can_fill)(void*, const OrderState&, Price, Quantity) noexcept {};
+    Reject (*health)(void*) noexcept {};
+};
+
 class Engine {
 public:
-    explicit Engine(EngineConfig config = {}) noexcept
+    explicit Engine(EngineConfig config = {}, ExecutionGuard guard = {}) noexcept
         : config_(config), book_(config.instrument), broker_(config.instrument, config.paper),
-          risk_(config.risk), strategy_(config.strategy) {
+          risk_(config.risk), strategy_(config.strategy), guard_(guard) {
         if (!broker_.valid() || !config.risk.valid() || !config.strategy.valid() ||
             config.initial_capital_paise < 0 || config.initial_capital_paise > notional(max_price, max_quantity)) {
             risk_.kill(Reject::invalid);
@@ -45,7 +53,11 @@ public:
             return assess_health() == Reject::none;
         }, [this](const OrderState& state, Price price, Quantity units) noexcept {
             const auto result = risk_.check_fill(state, price, units, position(), broker_.orders(), book_.mid());
-            return result == Reject::none ? check_fill_cash(state, price, units) : result;
+            if (result != Reject::none) return result;
+            const auto cash = check_fill_cash(state, price, units);
+            if (cash != Reject::none) return cash;
+            return guard_.can_fill != nullptr
+                ? guard_.can_fill(guard_.context, state, price, units) : Reject::none;
         });
         if (risk_.killed()) { shutdown_orders(); return true; }
         if (config_.strategy_enabled) {
@@ -185,6 +197,10 @@ private:
         return *projected >= reserved ? Reject::none : Reject::funds;
     }
     [[nodiscard]] Reject assess_health() noexcept {
+        if (guard_.health != nullptr) {
+            const auto result = guard_.health(guard_.context);
+            if (result != Reject::none) risk_.kill(result);
+        }
         if (book_.ready() && absolute(notional(book_.mid(), position().quantity)) > config_.risk.max_total_notional) {
             risk_.kill(Reject::notional);
         }
@@ -216,6 +232,7 @@ private:
     PaperBroker broker_;
     RiskManager risk_;
     MomentumStrategy strategy_;
+    ExecutionGuard guard_;
     SpscQueue<Event, 2048> audit_;
     Time now_{};
     OrderId next_id_{1};
