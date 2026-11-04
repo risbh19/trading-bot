@@ -401,6 +401,31 @@ class NetworkPaperTests(unittest.TestCase):
             self.assertTrue(summary['risk_halted'])
             self.assertEqual(summary['open_orders'], 0)
 
+    def test_prepared_operation_recovery_retains_original_downtime_anchor(self):
+        config = ROOT / 'config/network-paper.conf'
+        with tempfile.TemporaryDirectory() as temporary:
+            original_wall = time.time_ns() - 600_000_000_000
+            with PaperEngine(LIBRARY, config) as engine:
+                output, manifest, session = self.make_resumable_session(temporary, engine)
+                session.accept(Quote('TEST.NS', 10000, 1000, market_open=True), 0, 1060)
+                session.journal.append_operation(dict(kind='operation', id=session.next_operation_id,
+                    op='tick', prepared_wall_time_ns=original_wall, elapsed_ns=10_000_000,
+                    sequence=2, bid=10099, ask=10101, quantity=session.quantity, session_open=True,
+                    source=dict(symbol='TEST.NS', price_paise=10100, source_time_s=1060,
+                                currency='INR', market_open=True, delayed=True),
+                    source_age_s=60, received_utc_s=1120))
+                session.close()
+            with PaperEngine(LIBRARY, config) as engine:
+                _, _, recovered = self.make_resumable_session(temporary, engine, resume=True, manifest=manifest)
+                try:
+                    self.assertEqual(recovered.last_commit_wall_time_ns, original_wall)
+                    downtime = time.time_ns() - recovered.last_commit_wall_time_ns
+                    recovered.heartbeat(recovered.last_engine_time + downtime)
+                    self.assertTrue(engine.snapshot()['killed'])
+                    self.assertEqual(engine.snapshot()['open_orders'], 0)
+                finally:
+                    recovered.close()
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

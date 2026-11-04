@@ -1,0 +1,28 @@
+{
+  "format_version": 1,
+  "mode": "paper",
+  "max_source_age_s": 1800,
+  "account": {
+    "initial_capital_paise": 10000000,
+    "max_gross_notional_paise": 10000000,
+    "max_daily_loss_paise": 100000,
+    "max_open_orders": 8,
+    "orders_per_second": 5,
+    "orders_per_minute": 100,
+    "orders_per_session": 1000
+  },
+  "instruments": [
+    {
+      "symbol": "RELIANCE.NS",
+      "config": "network-portfolio-a.conf",
+      "quantity": 100,
+      "spread_ticks": 1
+    },
+    {
+      "symbol": "TCS.NS",
+      "config": "network-portfolio-b.conf",
+      "quantity": 100,
+      "spread_ticks": 1
+    }
+  ]
+}

@@ -2,6 +2,8 @@
 
 This mode connects public **delayed/indicative Indian equity prices** to the existing C++ `PaperBroker`. It uses virtual money and sends no orders to a broker. It needs no broker account, API key, deposit or additional Python packages.
 
+For several symbols sharing one capital budget and recovery journal, use the [multi-symbol portfolio runner](portfolio-streaming.md). Multiple independent single-symbol sessions represent separate virtual accounts.
+
 It is not a real-time NSE/BSE tick feed. Yahoo labels its [RELIANCE.NS quote](https://finance.yahoo.com/quote/RELIANCE.NS/) delayed; its [data-provider help](https://help.yahoo.com/kb/finance/article-exchanges-data-delays-sln2310.html) explains exchange-specific coverage. The public chart endpoint is undocumented and can change or become unavailable. An HTTP success does not make the underlying quote real-time.
 
 ## Start
@@ -71,6 +73,8 @@ The Windows launcher accepts the same session folder with `-Resume`:
 Resume uses the saved configuration and refuses a changed configuration, a finished session, or a second process holding the session lock. It replays the durable normalized-tick journal through the C++ engine and compares each saved order-event batch and account snapshot. A mismatch stops recovery. A torn final journal line is discarded; a prepared tick without a checkpoint is replayed and checkpointed because paper execution has no external side effect. After reconciliation, working paper orders are canceled before the feed resumes. If the saved quote is older than the engine stale limit, recovery latches a risk halt and does not resume trading. This is recovery of the local simulated ledger; there is no external broker order or account to reconcile.
 
 ## Reports
+
+The session owner now holds an OS file lease. `session.lock` may remain after exit and does not itself mean a session is running. Live legacy owners are refused; stop older runners before upgrading. Lock migration and crash-release behavior are described in the [portfolio recovery guide](portfolio-streaming.md).
 
 Find the path printed in the console, under `reports/network-paper/<UTC timestamp>-<symbol>-<id>/`:
 

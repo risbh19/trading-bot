@@ -111,48 +111,68 @@ def _pid_is_alive(pid: int) -> bool:
 
 
 class SessionLock:
-    """Exclusive lock; a lock with an unverifiable owner fails closed."""
+    """OS-owned lease. A persistent diagnostic file is never unlinked on takeover."""
 
     def __init__(self, path: Path):
         self.path = path
-        self.token = f'{os.getpid()} {uuid.uuid4().hex}\n'.encode('ascii')
+        self.token = f'v2 {os.getpid()} {uuid.uuid4().hex}\n'.encode('ascii')
         self.held = False
+        self.descriptor = None
+
+    @staticmethod
+    def _lease(descriptor, acquire):
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        if os.name == 'nt':
+            import msvcrt
+            msvcrt.locking(descriptor, msvcrt.LK_NBLCK if acquire else msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB if acquire else fcntl.LOCK_UN)
 
     def acquire(self) -> None:
-        for _ in range(3):
-            try:
-                descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            except FileExistsError:
+        if self.held:
+            raise RuntimeError('Paper session is already running under this owner')
+        descriptor = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            self._lease(descriptor, True)
+        except OSError as error:
+            os.close(descriptor)
+            raise RuntimeError('Paper session is already running or its owner lease is unavailable') from error
+        try:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            owner = os.read(descriptor, 4096)
+            if owner and not owner.startswith(b'v2 '):
                 try:
-                    owner = self.path.read_text(encoding='ascii').split()
-                    pid = int(owner[0])
-                except (OSError, ValueError, IndexError) as error:
-                    raise RuntimeError('Existing session lock is unreadable; refusing concurrent recovery') from error
+                    pid = int(owner.decode('ascii').split()[0])
+                    if pid <= 0:
+                        raise ValueError('Invalid legacy owner PID')
+                except (UnicodeError, ValueError, IndexError) as error:
+                    raise RuntimeError('Existing legacy session lock is unreadable; refusing recovery') from error
                 if _pid_is_alive(pid):
-                    raise RuntimeError(f'Paper session is already running under process {pid}')
-                try:
-                    self.path.unlink()
-                except FileNotFoundError:
-                    pass
-                continue
-            with os.fdopen(descriptor, 'wb') as stream:
-                stream.write(self.token)
-                stream.flush()
-                os.fsync(stream.fileno())
-            self.held = True
-            return
-        raise RuntimeError('Could not acquire the paper-session lock')
+                    raise RuntimeError(f'Legacy paper session is already running under process {pid}')
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            os.ftruncate(descriptor, 0)
+            remaining = memoryview(self.token)
+            while remaining:
+                written = os.write(descriptor, remaining)
+                if written <= 0:
+                    raise OSError('Short write to session owner lease')
+                remaining = remaining[written:]
+            os.fsync(descriptor)
+        except Exception:
+            os.close(descriptor)  # Closing releases the OS lease even on failed metadata writes.
+            raise
+        self.descriptor, self.held = descriptor, True
 
     def release(self) -> None:
         if not self.held:
             return
+        descriptor = self.descriptor
         try:
-            if self.path.read_bytes() == self.token:
-                self.path.unlink()
-        except FileNotFoundError:
-            pass
+            self._lease(descriptor, False)
         finally:
-            self.held = False
+            os.close(descriptor)
+            self.descriptor, self.held = None, False
 
     def __enter__(self):
         self.acquire()
@@ -181,7 +201,12 @@ class SessionJournal:
             self.fd = os.open(path, os.O_WRONLY | os.O_APPEND)
         else:
             self.fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_APPEND, 0o600)
-            self._write(expected)
+            try:
+                self._write(expected)
+            except Exception:
+                os.close(self.fd)
+                self.fd = None
+                raise
             self.transactions = []
 
     @staticmethod
@@ -190,6 +215,8 @@ class SessionJournal:
         pending = None
         expected_id = 1
         for record in records:
+            if not isinstance(record, dict):
+                raise ValueError('Session journal records must be JSON objects')
             if record.get('kind') == 'operation':
                 if pending is not None or record.get('id') != expected_id:
                     raise ValueError('Session journal operation sequence is invalid')

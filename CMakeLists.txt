@@ -67,6 +67,8 @@ if(Python3_Interpreter_FOUND)
         $<TARGET_FILE:paper_trader> ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(research PROPERTIES TIMEOUT 90)
     add_test(NAME feed_health COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_health.py)
+    add_test(NAME session_lock COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_session_lock.py)
+    set_tests_properties(session_lock PROPERTIES TIMEOUT 30)
     add_test(NAME portfolio_replay COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_portfolio_replay.py
         $<TARGET_FILE:paper_portfolio> ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(portfolio_replay PROPERTIES TIMEOUT 90)
@@ -76,5 +78,8 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME network_paper COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_network_paper.py
             $<TARGET_FILE:paper_engine> ${CMAKE_CURRENT_SOURCE_DIR})
         set_tests_properties(network_paper PROPERTIES TIMEOUT 30)
+        add_test(NAME portfolio_stream COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_portfolio_stream.py
+            $<TARGET_FILE:paper_engine> ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(portfolio_stream PROPERTIES TIMEOUT 90)
     endif()
 endif()
