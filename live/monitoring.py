@@ -23,6 +23,13 @@ COUNTERS = {
     'validation_failures': ('validation_failures', 'validation_failures'),
 }
 CONTENT_TYPE = 'text/plain; version=0.0.4; charset=utf-8'
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; "
+       "img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'")
+
+
+def _state(value):
+    return {'awaiting_fresh_quote': 'waiting', 'waiting_for_fresh_quotes': 'waiting',
+            'waiting_for_fresh_quote': 'waiting'}.get(value, value)
 
 
 def _pairs(items):
@@ -147,8 +154,7 @@ class SessionExporter:
         started, updated = _number(health.get('started_utc_s')), _number(health.get('updated_utc_s'))
         if not started <= updated <= now:
             raise ValueError('Invalid report clock')
-        state = {'awaiting_fresh_quote': 'waiting', 'waiting_for_fresh_quotes': 'waiting'}.get(
-            health.get('status'), health.get('status'))
+        state = _state(health.get('status'))
         if state not in STATES[:-1] or (manifest['status'] == 'finished' and state not in ('stopped', 'halted')):
             raise ValueError('Invalid lifecycle state')
         portfolio = manifest.get('kind') == 'paper_portfolio'
@@ -208,12 +214,15 @@ class SessionExporter:
                 raise ValueError('Future source time')
             counters = {name: _integer(record.get(fields[int(portfolio)]))
                         for name, fields in COUNTERS.items()}
-            normalized_sources[symbol] = dict(counters=counters, time=source_time)
+            source_state = _state(record.get('status'))
+            if source_state not in STATES[:-1]:
+                raise ValueError('Invalid source state')
+            normalized_sources[symbol] = dict(counters=counters, time=source_time, state=source_state)
         healthy = state == 'healthy' and not killed and not audit_failed and enabled and ready
         if state == 'healthy' and not healthy:
             raise ValueError('Inconsistent healthy state')
         self.identity = key
-        return state, updated, dict(started=started, values=values, sources=normalized_sources,
+        return state, updated, dict(started=started, updated=updated, values=values, sources=normalized_sources,
                                    execution_enabled=enabled, portfolio=portfolio)
 
     def snapshot(self):
@@ -282,12 +291,41 @@ class SessionExporter:
                          value, {'symbol': symbol}, 'counter')
         return '\n'.join(lines) + '\n'
 
+    def dashboard_snapshot(self):
+        """Allowlisted view of one validated observation; no raw report or identity."""
+        observed = self.snapshot()
+        data = observed.data
+        return dict(schema_version=1, mode='paper', valid=observed.valid, fresh=observed.fresh,
+                    healthy=observed.healthy, state=observed.state,
+                    report_age_seconds=observed.age, max_age_seconds=self.max_age,
+                    process_started_utc_s=data['started'] if data else None,
+                    updated_utc_s=data['updated'] if data else None,
+                    account=dict(data['values']) if observed.fresh else None,
+                    execution_enabled=(observed.healthy and data['execution_enabled']
+                                       if observed.fresh and data['portfolio'] else None),
+                    sources=[dict(symbol=symbol, state=record['state'],
+                                  source_age_seconds=(data['now'] - record['time']
+                                                      if record['time'] is not None else None),
+                                  counters=dict(record['counters']) if observed.fresh else None)
+                             for symbol, record in sorted(data['sources'].items())] if data else [])
+
 
 def make_server(exporter, port=9400):
     if type(port) is not int or not 0 <= port <= 65535:
         raise ValueError('port must be 0..65535')
 
+    assets_root = Path(__file__).resolve().parent
+    assets = {
+        '/': ((assets_root / 'dashboard.html').read_bytes(), 'text/html; charset=utf-8'),
+        '/dashboard.css': ((assets_root / 'dashboard.css').read_bytes(), 'text/css; charset=utf-8'),
+        '/dashboard.js': ((assets_root / 'dashboard.js').read_bytes(), 'application/javascript; charset=utf-8'),
+    }
+    assets['/dashboard'] = assets['/']
+
     class Handler(BaseHTTPRequestHandler):
+        server_version = 'PaperMonitor'
+        sys_version = ''
+
         def setup(self):
             super().setup()
             self.connection.settimeout(2)
@@ -296,18 +334,44 @@ def make_server(exporter, port=9400):
             pass
 
         def _reply(self, code, body, content_type='text/plain; charset=utf-8'):
-            body = body.encode('utf-8')
+            body = body.encode('utf-8') if isinstance(body, str) else body
             self.send_response(code)
             self.send_header('Content-Type', content_type)
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Security-Policy', CSP)
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Referrer-Policy', 'no-referrer')
             self.send_header('Connection', 'close')
             self.end_headers()
             if self.command != 'HEAD':
                 self.wfile.write(body)
 
+        def _allowed_request(self):
+            actual_port = self.server.server_address[1]
+            hosts = {f'127.0.0.1:{actual_port}', f'localhost:{actual_port}'}
+            if actual_port == 80:
+                hosts.update(('127.0.0.1', 'localhost'))
+            headers = self.headers.get_all('Host', [])
+            if len(headers) != 1 or headers[0].lower() not in hosts:
+                self._reply(400, 'invalid host\n')
+                return False
+            origins = self.headers.get_all('Origin', [])
+            if origins and (len(origins) != 1 or origins[0].lower() not in
+                            {'http://' + host for host in hosts}):
+                self._reply(403, 'origin not allowed\n')
+                return False
+            return True
+
         def do_GET(self):
-            if self.path == '/metrics':
+            if not self._allowed_request():
+                return
+            if self.path in assets:
+                self._reply(200, *assets[self.path])
+            elif self.path == '/api/snapshot':
+                self._reply(200, json.dumps(exporter.dashboard_snapshot(), ensure_ascii=False,
+                                           allow_nan=False), 'application/json; charset=utf-8')
+            elif self.path == '/metrics':
                 self._reply(200, exporter.render_metrics(), CONTENT_TYPE)
             elif self.path == '/healthz':
                 self._reply(200, 'ok\n')
@@ -320,9 +384,11 @@ def make_server(exporter, port=9400):
         do_HEAD = do_GET
 
         def do_POST(self):
+            if not self._allowed_request():
+                return
             self._reply(405, 'method not allowed\n')
 
-        do_PUT = do_PATCH = do_DELETE = do_OPTIONS = do_POST
+        do_PUT = do_PATCH = do_DELETE = do_OPTIONS = do_TRACE = do_POST
 
     return HTTPServer(('127.0.0.1', port), Handler)
 
@@ -338,7 +404,8 @@ def main(argv=None):
             raise ValueError('port must be 1..65535')
         exporter = SessionExporter(args.session, max_age=args.max_age)
         with make_server(exporter, args.port) as server:
-            print(f'Paper monitoring: http://127.0.0.1:{args.port}/metrics (read only)', flush=True)
+            print(f'Paper dashboard: http://127.0.0.1:{args.port}/ (read only)', flush=True)
+            print(f'Prometheus metrics: http://127.0.0.1:{args.port}/metrics', flush=True)
             try:
                 server.serve_forever(poll_interval=0.2)
             except KeyboardInterrupt:

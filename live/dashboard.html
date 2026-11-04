@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Paper desk · Account overview</title>
+  <link rel="stylesheet" href="/dashboard.css">
+  <script src="/dashboard.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Paper desk overview"><span class="brand-mark">p.</span> Paper desk</a>
+    <div class="top-meta"><span class="pill">Paper only</span><span class="read-only">Read-only view</span></div>
+  </header>
+  <main id="overview">
+    <div class="page-heading">
+      <div><p class="eyebrow">ACCOUNT OVERVIEW</p><h1>Your paper account, at a glance.</h1><p class="subtitle">Account balance, source data and session health in one place.</p></div>
+      <button id="refresh" type="button">Refresh <span aria-hidden="true">↻</span></button>
+    </div>
+    <section class="status-panel" id="status-panel" data-tone="neutral" aria-label="Session health">
+      <span class="status-dot" aria-hidden="true"></span>
+      <div class="status-copy" role="status" aria-live="polite" aria-atomic="true"><h2 id="status-title">Connecting to your account</h2><p id="status-detail">Waiting for a validated report.</p></div>
+      <div class="report-age"><span>REPORT AGE</span><strong id="report-age">—</strong></div>
+    </section>
+    <noscript><p class="notice">Enable JavaScript to view current reports. This page cannot control the paper runner.</p></noscript>
+    <section class="account-grid" aria-label="Paper account balances">
+      <article class="balance-card"><h2>Portfolio value</h2><p id="equity" class="balance">—</p><p class="card-caption">Cash plus marked inventory</p></article>
+      <article class="balance-card"><h2>Available cash</h2><p id="cash" class="balance">—</p><p class="card-caption">Shared virtual account</p></article>
+      <article class="balance-card"><h2>Paper P&amp;L</h2><p id="pnl" class="balance">—</p><p class="card-caption">Includes simulated fees</p></article>
+      <article class="balance-card"><h2>Pending orders</h2><p id="orders" class="balance">—</p><p class="card-caption">Working paper orders</p></article>
+    </section>
+    <div class="detail-strip" aria-label="Additional account values">
+      <span>Simulated fees <strong id="fees">—</strong></span><span>Gross exposure <strong id="gross">—</strong></span><span>Reserved cash <strong id="reserved">—</strong></span>
+    </div>
+    <div class="lower-grid">
+      <section class="sources-panel" aria-labelledby="sources-title">
+        <div class="panel-heading"><div><p class="eyebrow">MARKET DATA</p><h2 id="sources-title">Your sources</h2></div><span id="source-count" class="count">0 sources</span></div>
+        <p class="table-note">Source age measures the original bar time, separate from report freshness.</p>
+        <div class="table-scroll"><table>
+          <thead><tr><th scope="col">Symbol</th><th scope="col">Last reported</th><th scope="col">Bar age</th><th scope="col">Requests</th><th scope="col">Accepted</th><th scope="col">Failures</th></tr></thead>
+          <tbody id="sources"></tbody>
+        </table></div>
+        <p id="empty-sources" class="empty">Source details will appear after a valid report arrives.</p>
+        <p class="table-footer">Counters cover the current runner process and reset after a restart.</p>
+      </section>
+      <aside class="session-panel" aria-labelledby="session-title">
+        <p class="eyebrow">SESSION DETAILS</p><h2 id="session-title">Know what is current</h2>
+        <dl><div><dt>Paper execution</dt><dd id="execution">—</dd></div><div><dt>Freshness limit</dt><dd id="freshness">—</dd></div><div><dt>Report updated</dt><dd id="updated">—</dd></div><div><dt>Runner started</dt><dd id="started">—</dd></div></dl>
+        <p class="session-note">This view cannot place, cancel or resume orders. Use the runner terminal to manage the session.</p>
+        <a class="metrics-link" href="/metrics">View Prometheus metrics <span aria-hidden="true">↗</span></a>
+      </aside>
+    </div>
+    <footer><span class="footer-mark" aria-hidden="true">◎</span><p>Practice account. Prices are delayed completed bars; depth, fees and fills are simulated. Remaining inventory stays marked after a clean stop.</p><span class="refresh-note" id="refresh-note">Updates every 5 seconds</span></footer>
+  </main>
+</body>
+</html>

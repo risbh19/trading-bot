@@ -41,3 +41,31 @@ jobs:
           docker run --rm --entrypoint /bin/promtool --volume "$PWD/monitoring:/rules:ro" --workdir /rules "$image" check config prometheus.yml
           docker run --rm --entrypoint /bin/promtool --volume "$PWD/monitoring:/rules:ro" --workdir /rules "$image" check rules alerts.yml
           docker run --rm --entrypoint /bin/promtool --volume "$PWD/monitoring:/rules:ro" --workdir /rules "$image" test rules alerts.test.yml
+  dashboard-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check dashboard in headless Chrome
+        env:
+          CHROME_BIN: google-chrome
+          DASH_SCREENSHOT_DIR: outputs/dashboard-preview
+        run: node tests/test_dashboard_browser.mjs
+      - name: Package the standalone monitoring view
+        run: python scripts/package-monitoring.py --output outputs/paper-monitoring.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paper-monitoring
+          path: outputs/paper-monitoring.zip
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dashboard-preview
+          path: outputs/dashboard-preview
+          retention-days: 7

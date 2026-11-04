@@ -1,0 +1,10 @@
+docs/monitoring-runbook.md text eol=lf
+docs/monitoring.md text eol=lf
+live/__init__.py text eol=lf
+live/dashboard.css text eol=lf
+live/dashboard.html text eol=lf
+live/dashboard.js text eol=lf
+live/monitoring.py text eol=lf
+monitoring/alerts.yml text eol=lf
+monitoring/prometheus.yml text eol=lf
+scripts/run-monitoring.ps1 text eol=lf

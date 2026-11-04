@@ -16,11 +16,17 @@ The standard-library exporter has no extra Python package or C++ build requireme
 
 | Endpoint | Response |
 | --- | --- |
+| `GET /` or `GET /dashboard` | Read-only account dashboard with a five-second refresh. |
+| `GET /api/snapshot` | Allowlisted current account/source JSON, with no raw reports, session IDs, paths or error strings. |
 | `GET /metrics` | Prometheus text metrics, HTTP 200 even when a report is missing, invalid or stale. Read the diagnostic metrics below. |
 | `GET /healthz` | HTTP 200 when the exporter can handle the request. This is exporter process health. |
 | `GET /readyz` | HTTP 200 only when the paper snapshot is valid, fresh and healthy; HTTP 503 otherwise, including a clean stopped session. |
 
-`HEAD` supports the same routes. Other paths, including requests with query parameters, are rejected; mutation methods are rejected. The HTTP API does not accept file paths or return raw reports, local paths or error strings. Keep Prometheus on the same host, or provide a separately configured authenticated transport if a remote collector is required.
+`HEAD` supports the same routes. Dashboard assets are served locally with no CDN or external requests. Other paths, including query parameters, are rejected; mutation methods are rejected. Requests require the exact loopback Host/port and reject foreign Origin headers. Responses use a restrictive Content Security Policy, no-store caching and no CORS access. Keep Prometheus on the same host, or provide a separately configured authenticated transport if a remote collector is required.
+
+Open [the local dashboard](http://127.0.0.1:9400/) in a browser. It shows reported INR balances, pending orders and source diagnostics. Single-symbol reports provide P&L/order values only; unavailable balances remain dashes. Stale, invalid or failed requests clear financial values and counters. The browser also expires cached values while a request is pending and requires a fresh response after tab restoration. Source ages and last-reported states remain diagnostic, separate from heartbeat freshness. This view has no trading or recovery controls.
+
+The [monitoring runbook](monitoring-runbook.md) covers startup, condition handling and a reproducible monitoring-only ZIP. Full native-runner packaging remains separate work.
 
 ## Interpret the metrics
 
