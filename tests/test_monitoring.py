@@ -13,6 +13,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from live.monitoring import SessionExporter, make_server
 from live import monitoring
+from live import recovery
+from live.recovery import atomic_json
 
 
 def single_records():
@@ -273,6 +275,97 @@ class MonitoringTests(unittest.TestCase):
             result = exporter.snapshot()
         self.assertFalse(result.valid)
         self.assertEqual(len(calls), 6)
+
+    def test_report_reader_does_not_block_atomic_replacement(self):
+        manifest, health = single_records()
+        self.write(manifest, health)
+        path = self.root / 'health.json'
+        original_bytes = path.read_bytes()
+        replacement = dict(health, status='retrying', updated_utc_s=996)
+        original_fstat = monitoring.os.fstat
+        original_replace = recovery.os.replace
+        replaced = []
+        blocked = threading.Event()
+        workers, errors = [], []
+
+        def track_replace(source, target):
+            try:
+                return original_replace(source, target)
+            except PermissionError:
+                blocked.set()
+                raise
+
+        def replace_in_worker():
+            try:
+                atomic_json(path, replacement)
+                replaced.append(True)
+            except BaseException as error:
+                errors.append(error)
+
+        def replace_after_open(fd):
+            # Hold the reader until a real Windows replace attempt has failed.
+            # Returning lets _read close it, so the writer's bounded retry works.
+            if monitoring.os.name == 'nt':
+                worker = threading.Thread(target=replace_in_worker, daemon=True)
+                workers.append(worker)
+                worker.start()
+                self.assertTrue(blocked.wait(timeout=3), 'Expected Windows target-open conflict')
+            else:
+                replace_in_worker()
+            return original_fstat(fd)
+
+        with patch('live.monitoring.os.fstat', side_effect=replace_after_open), \
+                patch('live.recovery.os.replace', side_effect=track_replace):
+            raw, observed = monitoring._read(path)
+            for worker in workers:
+                worker.join(timeout=3)
+                self.assertFalse(worker.is_alive(), 'Replacement did not finish after reader closed')
+        self.assertEqual(errors, [])
+        self.assertEqual(replaced, [True])
+        self.assertEqual(raw, original_bytes)
+        self.assertEqual(observed, health)
+        self.assertEqual(json.loads(path.read_text(encoding='utf-8')), replacement)
+
+    def test_windows_report_retry_is_bounded_and_preserves_complete_files(self):
+        manifest, health = single_records()
+        self.write(manifest, health)
+        path = self.root / 'health.json'
+        original = path.read_bytes()
+        replacement = dict(health, status='retrying')
+        error = PermissionError('simulated sharing conflict')
+        error.winerror = 32
+        with patch('live.recovery.os.name', 'nt'), \
+                patch('live.recovery.os.replace', side_effect=error) as replace, \
+                patch('live.recovery.time.sleep') as sleep:
+            with self.assertRaises(PermissionError):
+                atomic_json(path, replacement)
+        self.assertEqual(replace.call_count, 6)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [.005, .01, .02, .04, .08])
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(json.loads(path.with_name('health.json.tmp').read_text(encoding='utf-8')),
+                         replacement)
+
+    def test_report_retry_succeeds_and_other_errors_are_immediate(self):
+        source, target = self.root / 'source', self.root / 'target'
+        conflict = PermissionError('simulated target-open conflict')
+        conflict.winerror = 5
+        with patch('live.recovery.os.name', 'nt'), \
+                patch('live.recovery.os.replace', side_effect=[conflict, conflict, None]) as replace, \
+                patch('live.recovery.time.sleep') as sleep:
+            recovery._replace_report(source, target)
+        self.assertEqual(replace.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [.005, .01])
+        for platform, winerror in (('nt', 123), ('posix', 5)):
+            with self.subTest(platform=platform, winerror=winerror):
+                error = PermissionError('not an eligible sharing conflict')
+                error.winerror = winerror
+                with patch('live.recovery.os.name', platform), \
+                        patch('live.recovery.os.replace', side_effect=error) as replace, \
+                        patch('live.recovery.time.sleep') as sleep:
+                    with self.assertRaises(PermissionError):
+                        recovery._replace_report(source, target)
+                self.assertEqual(replace.call_count, 1)
+                sleep.assert_not_called()
 
     def test_configured_labels_are_escaped_and_control_characters_are_rejected(self):
         manifest, health = single_records()

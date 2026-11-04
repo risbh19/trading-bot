@@ -38,9 +38,36 @@ def _bad_constant(_):
     raise ValueError('Nonfinite JSON value')
 
 
+def _open_report(path):
+    if os.name != 'nt':
+        return os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    # Ordinary CRT opens deny deletion/rename while held. The runner atomically
+    # replaces these files: a monitoring read must not cause its write to fail.
+    import ctypes
+    from ctypes import wintypes
+    import msvcrt
+
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    create = kernel32.CreateFileW
+    create.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE)
+    create.restype = wintypes.HANDLE
+    close = kernel32.CloseHandle
+    close.argtypes = (wintypes.HANDLE,)
+    close.restype = wintypes.BOOL
+    handle = create(str(path), 0x80000000, 0x00000007, None, 3, 0x00000080, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except BaseException:
+        close(handle)
+        raise
+
+
 def _read(path):
     # A bounded regular-file read; never consume journals or follow HTTP path input.
-    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_BINARY', 0) | getattr(os, 'O_NONBLOCK', 0))
+    fd = _open_report(path)
     with os.fdopen(fd, 'rb') as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError('Expected a regular report file')

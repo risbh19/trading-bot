@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -22,7 +23,22 @@ def atomic_json(path: Path, value) -> None:
         stream.write(_json_bytes(value))
         stream.flush()
         os.fsync(stream.fileno())
-    os.replace(temporary, path)
+    _replace_report(temporary, path)
+
+
+def _replace_report(source, target):
+    # Windows MoveFileEx can reject replacement while a brief reader holds the
+    # target, even with delete sharing. Preserve atomic replacement semantics;
+    # retry only these transient sharing/access errors for at most 155 ms.
+    delays = (0.005, 0.01, 0.02, 0.04, 0.08)
+    for attempt in range(len(delays) + 1):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as error:
+            if os.name != 'nt' or getattr(error, 'winerror', None) not in (5, 32) or attempt == len(delays):
+                raise
+            time.sleep(delays[attempt])
 
 
 def config_digest(data: bytes) -> str:
