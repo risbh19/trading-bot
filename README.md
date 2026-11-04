@@ -108,6 +108,6 @@ Read-only Prometheus monitoring is available for either network runner:
 python -m live.monitoring --session reports/network-portfolio/SESSION
 ```
 
-Pass the runner's actual session directory. The loopback exporter reports stale, invalid, paused, stopped and halted sessions separately; [monitoring](docs/monitoring.md) includes metrics, scrape configuration and tested alert rules.
+Pass the runner's actual session directory and open [the local dashboard](http://127.0.0.1:9400/) for the read-only account view. It reports stale, invalid, paused, stopped and halted sessions separately and hides outdated balances. [Monitoring](docs/monitoring.md) includes metrics and tested alert rules; the [monitoring runbook](docs/monitoring-runbook.md) covers starting, recovery and a reproducible standalone ZIP.
 
 See [architecture](docs/architecture.md), [operations and roadmap](docs/operations.md), [research validation](docs/research.md), [paper portfolio](docs/portfolio.md), [portfolio streaming/recovery](docs/portfolio-streaming.md), and [validation](docs/validation.md). Durable single/multi-symbol paper sessions, research validation, public-feed resilience, local health reporting, Prometheus integration and shared-account portfolio risk are implemented. Remaining work includes broker-specific fee/data validation, authenticated streams and notification receiver/deployment setup.

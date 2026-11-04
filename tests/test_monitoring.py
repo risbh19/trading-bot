@@ -469,7 +469,7 @@ class MonitoringTests(unittest.TestCase):
             self.assertEqual(body, b'')
             for method in ('POST', 'PUT', 'PATCH', 'DELETE'):
                 self.assertEqual(request(method, '/metrics')[0], 405)
-            for path in ('/', '/session.json', '/../session.json', '/metrics?path=session.json'):
+            for path in ('/session.json', '/../session.json', '/metrics?path=session.json'):
                 self.assertEqual(request('GET', path)[0], 404)
             self.now = 1020
             self.assertEqual(request('GET', '/healthz')[0], 200)
