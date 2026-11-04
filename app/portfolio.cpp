@@ -38,6 +38,9 @@ int run(int argc, char** argv) {
     auto paths = settings.sources;
     paths.insert(paths.end(), {input_path, audit_path, summary_path, argv[0]});
     io::distinct_paths(paths);
+    if (std::filesystem::exists(audit_path) || std::filesystem::exists(summary_path)) {
+        throw std::runtime_error("Portfolio outputs already exist; choose new audit/summary paths");
+    }
     auto portfolio = std::make_unique<PaperPortfolio>(settings.account, settings.instruments);
     std::ifstream input(input_path);
     if (!input) throw std::runtime_error("Cannot read portfolio market data: " + input_path);

@@ -69,6 +69,7 @@ The C++ `Engine` exposes `submit`, `modify`, `cancel`, `heartbeat`, `disconnect`
 - Deterministic audit/replay, independent cash/fee/PnL/liquidity reconciliation, allocation checks and latency percentile harness.
 - Research input/config snapshots and hashes, execution-cost scenarios, chronological train/test selection and explicit fee evidence. See the [research guide](docs/research.md).
 - Bounded public-feed retries that cancel pending orders first, source-quality checks, local health metrics and transition alerts.
+- A multi-instrument paper replay coordinator with one shared cash account, pending reservations, aggregate exposure/loss/order limits and fill-time account guards. See the [portfolio guide](docs/portfolio.md).
 
 ## Project layout
 
@@ -88,7 +89,7 @@ scripts/          # Windows mock-run launcher
 
 ## Important model boundaries
 
-One engine handles one instrument and one session. It models top-of-book liquidity rather than an exchange queue, depth or market impact. Orders fill only on a later snapshot after their configured latency. Terminal inventory is marked at mid and **is not automatically liquidated**. The optional virtual capital setting reserves cash for pending buys and fees; there is no margin, settlement, derivatives or MIS square-off model. A real-time broker feed, dashboard and production order gateway are not included.
+Each engine handles one instrument and one session. The offline `paper_portfolio` coordinator can share a single account across 1..32 engines; the public-feed session runner remains single-symbol. Both model top-of-book liquidity rather than exchange queues, depth or market impact. Orders fill only on a later snapshot after configured latency. Terminal inventory is marked at mid and **is not automatically liquidated**. Cash reservations include pending buys and fees; margin, settlement, derivatives and MIS square-off are not modeled. A real-time broker feed, dashboard and production order gateway are not included.
 
 Fee defaults are illustrative arithmetic fixtures, not current CNC/MIS/NRML tariffs. Set product-specific fees and instrument constraints from verified metadata before interpreting any economic results. Submission rate limits are simulation settings; local cancels are immediate and do not model broker request throttling/cancel races. Real-feed paper trading is a later adapter step.
 
@@ -100,4 +101,4 @@ Fee defaults are illustrative arithmetic fixtures, not current CNC/MIS/NRML tari
 
 The harness reports p50/p90/p99/p99.9 and a timer baseline. It measures in-memory book/strategy/risk/paper matching with audit enqueueing; it excludes CSV, disk, network and broker/exchange processing. A microsecond engine measurement is not an exchange tick-to-trade guarantee. Optional tuning: `-DTRADING_NATIVE=ON`, `-DTRADING_LTO=ON`; sanitizer checks: `-DTRADING_SANITIZERS=ON` on supported GCC/Clang hosts.
 
-See [architecture](docs/architecture.md), [operations and roadmap](docs/operations.md), [research validation](docs/research.md), and [validation](docs/validation.md). Durable paper recovery, research validation, public-feed resilience and local health reporting are implemented. Remaining P1 work includes broker-specific fee/data validation and streaming-feed integration, multi-symbol portfolio risk and external monitoring integration.
+See [architecture](docs/architecture.md), [operations and roadmap](docs/operations.md), [research validation](docs/research.md), [paper portfolio](docs/portfolio.md), and [validation](docs/validation.md). Durable paper recovery, research validation, public-feed resilience, local health reporting and shared-account offline portfolio risk are implemented. Remaining work includes broker-specific fee/data validation, multi-symbol streaming/recovery and external monitoring integration.

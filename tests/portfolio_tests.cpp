@@ -171,6 +171,34 @@ void account_loss_is_checked_between_individual_fills() {
     CHECK(p->open_orders() == 0);
 }
 
+void aggregate_marked_notional_and_reducing_orders() {
+    auto limits = account();
+    limits.max_gross_notional = 20'020;
+    limits.max_loss = 10'000;
+    auto p = ready(limits);
+    CHECK(p->submit(buy(1, 1)) == Reject::none);
+    CHECK(p->submit(buy(2, 1)) == Reject::none);
+    CHECK(p->on_tick(quote(1, 1, 2)));
+    CHECK(p->on_tick(quote(2, 2, 2)));
+    auto reducing = buy(2, 2, 1, 10'000);
+    reducing.side = Side::sell;
+    CHECK(p->submit(reducing) == Reject::none); // Gross cap must still permit de-risking.
+    CHECK(p->on_tick(quote(2, 3, 3)));
+    CHECK(p->engine(1).position().quantity == 0);
+    CHECK(!p->killed());
+
+    limits.max_gross_notional = 25'000;
+    p = ready(limits);
+    CHECK(p->submit(buy(1, 1)) == Reject::none);
+    CHECK(p->submit(buy(2, 1)) == Reject::none);
+    CHECK(p->on_tick(quote(1, 1, 2)));
+    CHECK(p->on_tick(quote(2, 2, 2)));
+    CHECK(p->on_tick(quote(1, 3, 3, 100, 16'000)));
+    CHECK(p->kill_reason() == Reject::notional);
+    CHECK(p->gross_notional() == 26'010);
+    CHECK(p->open_orders() == 0);
+}
+
 void sell_fee_debit_cannot_overdraw_the_shared_account() {
     auto limits = account();
     limits.initial_capital = 20'020;
@@ -204,6 +232,13 @@ void stale_constituent_stops_fresh_symbol_before_fill() {
     CHECK(p->open_orders() == 0);
     CHECK(p->on_tick(quote(1, 3 * second + 1, 2)));
     CHECK(p->killed()); // A refreshed quote cannot clear the account latch.
+
+    p = ready();
+    CHECK(p->submit(buy(1, 1)) == Reject::none);
+    CHECK(!p->on_tick(quote(1, 3 * second, 1)));
+    CHECK(p->kill_reason() == Reject::stale); // Duplicate depth cannot reset freshness.
+    CHECK(p->engine(0).position().quantity == 0);
+    CHECK(p->open_orders() == 0);
 }
 
 void warmup_ids_closing_and_regressing_global_clock() {
@@ -256,6 +291,7 @@ int main() {
     aggregate_request_windows_and_consumed_ids();
     aggregate_marked_loss_cancels_before_replacement_fills();
     account_loss_is_checked_between_individual_fills();
+    aggregate_marked_notional_and_reducing_orders();
     sell_fee_debit_cannot_overdraw_the_shared_account();
     stale_constituent_stops_fresh_symbol_before_fill();
     warmup_ids_closing_and_regressing_global_clock();

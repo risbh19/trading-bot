@@ -64,6 +64,9 @@ if(Python3_Interpreter_FOUND)
         $<TARGET_FILE:paper_trader> ${CMAKE_CURRENT_SOURCE_DIR})
     set_tests_properties(research PROPERTIES TIMEOUT 90)
     add_test(NAME feed_health COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_health.py)
+    add_test(NAME portfolio_replay COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_portfolio_replay.py
+        $<TARGET_FILE:paper_portfolio> ${CMAKE_CURRENT_SOURCE_DIR})
+    set_tests_properties(portfolio_replay PROPERTIES TIMEOUT 90)
     # The ordinary Python host does not preload the sanitizer runtime. Native ABI
     # behavior is still checked by the linked api_tests under sanitizers.
     if(NOT TRADING_SANITIZERS)

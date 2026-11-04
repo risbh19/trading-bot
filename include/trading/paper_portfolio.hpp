@@ -117,7 +117,10 @@ public:
         auto* member = find(tick.instrument);
         if (member == nullptr) { kill(Reject::invalid); return false; }
         const auto& book = member->engine->book();
-        if (book.ready() && (tick.sequence <= book.tick().sequence || tick.time < book.tick().time)) return false;
+        if (book.ready() && (tick.sequence <= book.tick().sequence || tick.time < book.tick().time)) {
+            if (tick.time >= now_) heartbeat(tick.time); // Clock progress is not a fresh quote.
+            return false;
+        }
         if (tick.time < now_) { kill(Reject::invalid); return false; }
         auto checked_book = book;
         if (!checked_book.update(tick)) { kill(Reject::invalid); return false; }
