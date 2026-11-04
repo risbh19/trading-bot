@@ -74,6 +74,8 @@ Resume uses the saved configuration and refuses a changed configuration, a finis
 
 ## Reports
 
+The session owner now holds an OS file lease. `session.lock` may remain after exit and does not itself mean a session is running. Live legacy owners are refused; stop older runners before upgrading. Lock migration and crash-release behavior are described in the [portfolio recovery guide](portfolio-streaming.md).
+
 Find the path printed in the console, under `reports/network-paper/<UTC timestamp>-<symbol>-<id>/`:
 
 | File | Contents |

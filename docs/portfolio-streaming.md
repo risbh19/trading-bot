@@ -61,6 +61,8 @@ After reconciliation, recovery advances the native clock, cancels every old pend
 
 Audit and normalized-tick CSVs rebuild through temporary files. Canonical journal data controls recovery; failed reconciliation preserves the existing CSVs. Native or journal/monitoring I/O failure stops execution, with no claim of a complete audit after canonical write failure.
 
+Owner leases use OS file locking on local filesystems, including [Windows byte-range locks](https://docs.python.org/3/library/msvcrt.html#msvcrt.locking). The diagnostic `session.lock` normally remains after clean exit; file presence or PID text is not ownership. The OS releases ownership when a process exits/crashes. Stop legacy runners before upgrading: a live legacy PID is refused, while a dead legacy owner can migrate under the exclusive lease. Use the same current lock protocol for every owner; deleting an active lock file is not a recovery procedure.
+
 ## Reports
 
 Each session has a unique folder under `reports/network-portfolio/`:
