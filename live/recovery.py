@@ -181,7 +181,12 @@ class SessionJournal:
             self.fd = os.open(path, os.O_WRONLY | os.O_APPEND)
         else:
             self.fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_APPEND, 0o600)
-            self._write(expected)
+            try:
+                self._write(expected)
+            except Exception:
+                os.close(self.fd)
+                self.fd = None
+                raise
             self.transactions = []
 
     @staticmethod
@@ -190,6 +195,8 @@ class SessionJournal:
         pending = None
         expected_id = 1
         for record in records:
+            if not isinstance(record, dict):
+                raise ValueError('Session journal records must be JSON objects')
             if record.get('kind') == 'operation':
                 if pending is not None or record.get('id') != expected_id:
                     raise ValueError('Session journal operation sequence is invalid')

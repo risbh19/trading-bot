@@ -76,5 +76,8 @@ if(Python3_Interpreter_FOUND)
         add_test(NAME network_paper COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_network_paper.py
             $<TARGET_FILE:paper_engine> ${CMAKE_CURRENT_SOURCE_DIR})
         set_tests_properties(network_paper PROPERTIES TIMEOUT 30)
+        add_test(NAME portfolio_stream COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_portfolio_stream.py
+            $<TARGET_FILE:paper_engine> ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(portfolio_stream PROPERTIES TIMEOUT 90)
     endif()
 endif()
